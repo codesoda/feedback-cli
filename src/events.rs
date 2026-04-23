@@ -115,14 +115,20 @@ pub struct Event {
     pub payload: Value,
 }
 
-#[derive(Debug)]
 pub struct EventEmitter<W: Write = io::Stdout> {
     writer: Mutex<BufWriter<W>>,
 }
 
-impl EventEmitter<io::Stdout> {
+impl EventEmitter<Box<dyn Write + Send>> {
+    pub fn boxed<W>(writer: W) -> Self
+    where
+        W: Write + Send + 'static,
+    {
+        Self::new(Box::new(writer))
+    }
+
     pub fn stdout() -> Self {
-        Self::new(io::stdout())
+        Self::boxed(io::stdout())
     }
 }
 
@@ -154,6 +160,14 @@ impl<W: Write> EventEmitter<W> {
         writer
             .into_inner()
             .map_err(|error| io::Error::new(error.error().kind(), error.to_string()))
+    }
+}
+
+impl<W: Write> fmt::Debug for EventEmitter<W> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EventEmitter")
+            .finish_non_exhaustive()
     }
 }
 

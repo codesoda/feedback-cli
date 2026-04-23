@@ -1,11 +1,13 @@
 use std::future::pending;
+use std::io::{self, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
-use discuss::state::{Thread, ThreadId, ThreadKind};
-use discuss::{serve, AppState, BroadcastEvent, DiscussError};
+use discuss::state::{State, Thread, ThreadId, ThreadKind};
+use discuss::{serve, AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -290,6 +292,126 @@ async fn api_events_stream_ends_cleanly_on_shutdown() {
 }
 
 #[tokio::test]
+async fn post_api_threads_creates_thread_and_emits_events() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":2,"anchorEnd":4,"snippet":"selected text","text":"Needs clarification"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["id"], "u-1");
+    assert!(body["createdAt"].as_str().is_some());
+
+    let snapshot = state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot();
+    assert_eq!(snapshot.threads.len(), 1);
+    assert_eq!(snapshot.threads[0].id, ThreadId("u-1".to_string()));
+    assert_eq!(snapshot.threads[0].anchor_start, 2);
+    assert_eq!(snapshot.threads[0].anchor_end, 4);
+    assert_eq!(snapshot.threads[0].snippet, "selected text");
+    assert_eq!(snapshot.threads[0].text, "Needs clarification");
+
+    let sse_event = read_until(&mut sse, "\n\n").await;
+    assert!(sse_event.contains("event: thread.created"));
+    assert!(sse_event.contains("\"id\":\"u-1\""));
+    assert!(sse_event.contains("\"anchorStart\":2"));
+    assert!(sse_event.contains("\"text\":\"Needs clarification\""));
+
+    let stdout = stdout_string(&stdout);
+    assert_eq!(stdout.lines().count(), 1);
+    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::ThreadCreated.to_string());
+    assert_eq!(emitted["payload"]["id"], "u-1");
+    assert_eq!(emitted["payload"]["anchorStart"], 2);
+    assert_eq!(emitted["payload"]["anchorEnd"], 4);
+    assert_eq!(emitted["payload"]["snippet"], "selected text");
+    assert_eq!(emitted["payload"]["text"], "Needs clarification");
+    assert_eq!(emitted["payload"]["createdAt"], body["createdAt"]);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_returns_structured_400_for_bad_json() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/threads", r#"{"anchorStart":2"#).await;
+    assert!(response.starts_with("HTTP/1.1 400"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "bad_request");
+    assert!(body["error"]["message"].as_str().is_some());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_returns_structured_400_for_missing_fields() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/threads", r#"{"anchorStart":2}"#).await;
+    assert!(response.starts_with("HTTP/1.1 400"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "bad_request");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("message string")
+        .contains("anchorEnd"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn busy_port_maps_to_port_in_use() {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind busy listener");
     let addr = listener.local_addr().expect("busy listener addr");
@@ -422,6 +544,25 @@ async fn get_path(addr: SocketAddr, path: &str) -> String {
     response
 }
 
+async fn post_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
+}
+
 async fn open_get_path(addr: SocketAddr, path: &str) -> TcpStream {
     let mut stream = TcpStream::connect(addr).await.expect("connect to server");
     let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
@@ -431,6 +572,33 @@ async fn open_get_path(addr: SocketAddr, path: &str) -> TcpStream {
         .expect("write request");
 
     stream
+}
+
+#[derive(Clone, Debug)]
+struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("stdout capture lock should not be poisoned")
+            .extend_from_slice(buf);
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn stdout_string(stdout: &Arc<Mutex<Vec<u8>>>) -> String {
+    let bytes = stdout
+        .lock()
+        .expect("stdout capture lock should not be poisoned")
+        .clone();
+
+    String::from_utf8(bytes).expect("stdout capture should be utf-8")
 }
 
 fn assert_js_headers(response: &str) {

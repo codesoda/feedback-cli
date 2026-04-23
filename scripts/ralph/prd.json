@@ -393,7 +393,7 @@
         "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

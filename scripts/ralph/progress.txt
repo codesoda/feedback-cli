@@ -21,6 +21,7 @@
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
+- HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -175,4 +176,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: `install.sh` is currently clone-build only and should compile with `RUSTFLAGS="-D warnings" cargo build --release` before copying `target/release/discuss`.
   - Gotchas encountered: the installer intentionally exits if `Cargo.toml` is not next to the script; curl/GitHub Releases install behavior remains deferred to the later full installer story.
   - Useful context: smoke-test installation with `DISCUSS_INSTALL_DIR="$(mktemp -d)" ./install.sh`; the script verifies the installed binary by running `discuss --version` from that path.
+---
+## 2026-04-23 13:48:22 AEST - US-019
+- Implemented `POST /api/threads` for creating user threads, including state insertion, structured 400 JSON errors, SSE broadcast, and stdout `thread.created` emission.
+- Files changed: `src/events.rs`, `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: mutation handlers should keep browser SSE and stdout event payloads in sync by serializing the stored state object once and reusing that payload.
+  - Gotchas encountered: `AppState` needs boxed event emitters so integration tests can capture emitted JSON lines without writing to real stdout.
+  - Useful context: new user thread IDs are process-local counter IDs (`u-1`, `u-2`, ...) and created threads use an empty breadcrumb because the v1 create-thread request body does not include breadcrumb data.
 ---

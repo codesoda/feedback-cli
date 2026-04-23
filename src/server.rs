@@ -1,26 +1,30 @@
 use std::future::Future;
-use std::io;
+use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::State as AxumState;
 use axum::http::header;
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 
 use crate::assets;
-use crate::events::EventEmitter;
-use crate::sse::EventBus;
-use crate::state::{SharedState, State};
+use crate::events::{Event, EventEmitter, EventKind};
+use crate::sse::{BroadcastEvent, EventBus};
+use crate::state::{SharedState, State, Thread, ThreadId, ThreadKind};
 use crate::{render, template, DiscussError, Result};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -31,19 +35,25 @@ const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 pub struct AppState {
     pub state: SharedState,
     pub bus: Arc<EventBus>,
-    pub emitter: Arc<EventEmitter>,
+    pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     markdown_source: Arc<str>,
     shutdown: ShutdownSignal,
+    next_thread_number: Arc<AtomicU64>,
 }
 
 impl AppState {
-    pub fn new(state: SharedState, bus: Arc<EventBus>, emitter: Arc<EventEmitter>) -> Self {
+    pub fn new(
+        state: SharedState,
+        bus: Arc<EventBus>,
+        emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
+    ) -> Self {
         Self {
             state,
             bus,
             emitter,
             markdown_source: Arc::from(""),
             shutdown: ShutdownSignal::new(),
+            next_thread_number: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -63,6 +73,12 @@ impl AppState {
 
     pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
         self.shutdown.subscribe()
+    }
+
+    fn next_user_thread_id(&self) -> ThreadId {
+        let number = self.next_thread_number.fetch_add(1, Ordering::Relaxed);
+
+        ThreadId(format!("u-{number}"))
     }
 }
 
@@ -119,11 +135,130 @@ fn build_router(app_state: AppState) -> Router {
         .route("/", get(get_root))
         .route("/api/state", get(get_api_state))
         .route("/api/events", get(get_api_events))
+        .route("/api/threads", post(post_api_threads))
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .fallback(not_found)
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateThreadRequest {
+    anchor_start: usize,
+    anchor_end: usize,
+    snippet: String,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateThreadResponse {
+    id: ThreadId,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiErrorResponse {
+    error: ApiError,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiError {
+    code: &'static str,
+    message: String,
+}
+
+async fn post_api_threads(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<CreateThreadRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+    let created_at = Utc::now();
+    let thread = Thread {
+        id: app_state.next_user_thread_id(),
+        anchor_start: request.anchor_start,
+        anchor_end: request.anchor_end,
+        snippet: request.snippet,
+        breadcrumb: String::new(),
+        text: request.text,
+        created_at,
+        kind: ThreadKind::User,
+    };
+
+    if app_state
+        .state
+        .write()
+        .map(|mut state| state.add_thread(thread.clone()))
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "state lock poisoned while creating thread",
+        );
+    }
+
+    let payload = match serde_json::to_value(&thread) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize created thread: {error}"),
+            );
+        }
+    };
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::ThreadCreated.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::ThreadCreated,
+        at: created_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit thread.created event: {error}"),
+        );
+    }
+
+    Json(CreateThreadResponse {
+        id: thread.id,
+        created_at,
+    })
+    .into_response()
+}
+
+fn api_error_response(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Response {
+    (
+        status,
+        Json(ApiErrorResponse {
+            error: ApiError {
+                code,
+                message: message.into(),
+            },
+        }),
+    )
+        .into_response()
 }
 
 async fn get_root(AxumState(app_state): AxumState<AppState>) -> Response {
