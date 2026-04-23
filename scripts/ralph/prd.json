@@ -364,8 +364,8 @@
         "Author `install.sh` at repo root for the clone-build path only; the full curl/GitHub Releases installer remains in US-043.",
         "Script requires `Cargo.toml` next to the script and exits non-zero with a clear message if run outside a source checkout.",
         "Script runs a release compile before installing: `RUSTFLAGS=\"-D warnings\" cargo build --release`.",
-        "Script copies `target/release/discuss` to `${DISCUSS_INSTALL_DIR:-/usr/local/bin}/discuss`, creating the install directory if needed and preserving executable permissions.",
-        "Script prints the installed path and verifies the installed binary by running `discuss --version` from that path.",
+        "Script copies `target/release/discuss` to `~/.discuss/bin/discuss`, creating the install directory if needed and preserving executable permissions.",
+        "Script prints the installed path, creates the `~/.local/bin/discuss` symlink, and verifies the linked binary by running `~/.local/bin/discuss --version`.",
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
@@ -498,7 +498,7 @@
         "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -874,7 +874,7 @@
       "acceptanceCriteria": [
         "Author install.sh at repo root with both modes",
         "Detection: if Cargo.toml is present next to the script, use the clone-build path; else use the curl-download path",
-        "Clone-build path: run `cargo build --release`, copy `target/release/discuss` to `$INSTALL_DIR` (default `/usr/local/bin`, override via `DISCUSS_INSTALL_DIR`)",
+        "Clone-build path: run `cargo build --release`, copy `target/release/discuss` to `~/.discuss/bin/discuss`, and symlink `~/.local/bin/discuss` to it",
         "Curl-download path: detect platform via `uname -s` and `uname -m` mapped to a target triple (at minimum `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`); fetch `discuss-vX.Y.Z-<target>.tar.gz` from the latest GitHub Release; extract; install to $INSTALL_DIR",
         "macOS quarantine handled (or documented in the failure message if user action is required)",
         "PATH check at the end: if $INSTALL_DIR is not on PATH, print a clear instruction (with the right shell-rc snippet)",

@@ -25,7 +25,9 @@ use tower_http::trace::TraceLayer;
 use crate::assets;
 use crate::events::{Event, EventEmitter, EventKind};
 use crate::sse::{BroadcastEvent, EventBus};
-use crate::state::{Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind};
+use crate::state::{
+    Draft, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
+};
 use crate::{render, template, DiscussError, Result};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -152,6 +154,10 @@ fn build_router(app_state: AppState) -> Router {
         .route("/", get(get_root))
         .route("/api/state", get(get_api_state))
         .route("/api/events", get(get_api_events))
+        .route(
+            "/api/drafts/new-thread",
+            post(post_api_drafts_new_thread).delete(delete_api_drafts_new_thread),
+        )
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
@@ -197,6 +203,39 @@ struct AddTakeRequest {
 #[derive(Debug, Deserialize)]
 struct ResolveThreadRequest {
     decision: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertNewThreadDraftRequest {
+    anchor_start: usize,
+    anchor_end: usize,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClearNewThreadDraftRequest {
+    anchor_start: usize,
+    anchor_end: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NewThreadDraftResponse {
+    scope: &'static str,
+    anchor_start: usize,
+    anchor_end: usize,
+    text: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NewThreadDraftCleared {
+    scope: &'static str,
+    anchor_start: usize,
+    anchor_end: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -639,6 +678,160 @@ async fn delete_api_thread(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             format!("failed to emit thread.deleted event: {error}"),
+        );
+    }
+
+    Json(OkResponse { ok: true }).into_response()
+}
+
+async fn post_api_drafts_new_thread(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<UpsertNewThreadDraftRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+
+    if request.text.trim().is_empty() {
+        return clear_new_thread_draft(
+            &app_state,
+            ClearNewThreadDraftRequest {
+                anchor_start: request.anchor_start,
+                anchor_end: request.anchor_end,
+            },
+        );
+    }
+
+    let updated_at = Utc::now();
+    let draft = Draft {
+        text: request.text,
+        updated_at,
+    };
+
+    if app_state
+        .state
+        .write()
+        .map(|mut state| {
+            state.upsert_new_thread_draft(request.anchor_start, request.anchor_end, draft.clone())
+        })
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "state lock poisoned while saving new-thread draft",
+        );
+    }
+
+    let response = NewThreadDraftResponse {
+        scope: "newThread",
+        anchor_start: request.anchor_start,
+        anchor_end: request.anchor_end,
+        text: draft.text,
+        updated_at,
+    };
+    let payload = match serde_json::to_value(&response) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize new-thread draft: {error}"),
+            );
+        }
+    };
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::DraftUpdated.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::DraftUpdated,
+        at: updated_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit draft.updated event: {error}"),
+        );
+    }
+
+    Json(response).into_response()
+}
+
+async fn delete_api_drafts_new_thread(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<ClearNewThreadDraftRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+
+    clear_new_thread_draft(&app_state, request)
+}
+
+fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequest) -> Response {
+    let emitted_at = Utc::now();
+
+    if app_state
+        .state
+        .write()
+        .map(|mut state| state.clear_new_thread_draft(request.anchor_start, request.anchor_end))
+        .is_err()
+    {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "state lock poisoned while clearing new-thread draft",
+        );
+    }
+
+    let cleared = NewThreadDraftCleared {
+        scope: "newThread",
+        anchor_start: request.anchor_start,
+        anchor_end: request.anchor_end,
+    };
+    let payload = match serde_json::to_value(cleared) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize cleared new-thread draft: {error}"),
+            );
+        }
+    };
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::DraftCleared.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::DraftCleared,
+        at: emitted_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit draft.cleared event: {error}"),
         );
     }
 

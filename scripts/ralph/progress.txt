@@ -3,7 +3,7 @@
 ## Codebase Patterns
 - Root Rust project is a single binary Cargo crate named `discuss`; keep `/target/` ignored and commit `Cargo.lock`.
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
-- Root `install.sh` is clone-build only until the later full installer story; smoke-test it with `DISCUSS_INSTALL_DIR="$(mktemp -d)" ./install.sh` so it builds with warnings denied and verifies the installed `discuss --version`.
+- Root `install.sh` is clone-build only until the later full installer story; it builds with warnings denied, installs to `~/.discuss/bin/discuss`, symlinks `~/.local/bin/discuss`, and verifies the linked binary with `--version`.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
@@ -22,6 +22,7 @@
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
+- New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Axum 0.8 dynamic path segments use `{id}` route syntax (for example `/api/threads/{id}/replies`), not legacy `:id`.
 - Child thread mutation routes should verify the target thread is present in `State::get_threads()` before writing child state; unknown or inactive IDs return structured 404 JSON.
 - Resolution mutation events must include `threadId`; `thread.resolved` payloads also include the stored `resolution` object for browser state updates.
@@ -220,4 +221,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: deletion uses `State::soft_delete_thread` after validating the active thread from `State::get_threads()`, so deleted threads disappear from snapshots while remaining available internally for transcript work.
   - Gotchas encountered: prepopulated threads must fail before mutation or event emission; tests should assert both empty stdout and no SSE event.
   - Useful context: the delete event payload is `{ "threadId": "<id>" }`, matching resolution/unresolution payload conventions for frontend incremental updates.
+---
+## 2026-04-23 14:17:45 AEST - US-024
+- Implemented `POST /api/drafts/new-thread` and `DELETE /api/drafts/new-thread` for server-side new-thread draft persistence, including whitespace-as-clear behavior, state updates, SSE broadcasts, and stdout draft events.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `install.sh`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`; this commit also carries pre-existing installer path/PRD acceptance text changes that were already dirty before this iteration.
+- **Learnings for future iterations:**
+  - Patterns discovered: new-thread draft event payloads use `{ scope: "newThread", anchorStart, anchorEnd, ... }`; `draft.updated` includes `text` and `updatedAt`, while `draft.cleared` omits text.
+  - Gotchas encountered: this implementation intentionally emits `draft.cleared` for idempotent no-op clears so connected tabs receive an explicit confirmation; tests assert that choice.
+  - Useful context: raw HTTP DELETE tests that carry JSON need a separate helper with `Content-Type: application/json` and `Content-Length`.
 ---
