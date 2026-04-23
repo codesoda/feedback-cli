@@ -3,6 +3,7 @@
 ## Codebase Patterns
 - Root Rust project is a single binary Cargo crate named `discuss`; keep `/target/` ignored and commit `Cargo.lock`.
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
+- Root `install.sh` is clone-build only until the later full installer story; smoke-test it with `DISCUSS_INSTALL_DIR="$(mktemp -d)" ./install.sh` so it builds with warnings denied and verifies the installed `discuss --version`.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
@@ -166,4 +167,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: SSE HTTP streaming belongs in `src/server.rs`, while `src/sse.rs` remains the process-local broadcast abstraction used by mutation handlers.
   - Gotchas encountered: raw HTTP SSE tests see chunked transfer framing, so assertions should look for SSE field lines instead of treating the whole TCP read as a bare event.
   - Useful context: `AppState::subscribe_shutdown()` is the hook that lets long-lived SSE responses end before Axum graceful shutdown waits indefinitely.
+---
+## 2026-04-23 13:42:28 AEST - US-018A
+- Implemented a root `install.sh` source-checkout installer for the clone-build path.
+- Files changed: `install.sh`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: `install.sh` is currently clone-build only and should compile with `RUSTFLAGS="-D warnings" cargo build --release` before copying `target/release/discuss`.
+  - Gotchas encountered: the installer intentionally exits if `Cargo.toml` is not next to the script; curl/GitHub Releases install behavior remains deferred to the later full installer story.
+  - Useful context: smoke-test installation with `DISCUSS_INSTALL_DIR="$(mktemp -d)" ./install.sh`; the script verifies the installed binary by running `discuss --version` from that path.
 ---

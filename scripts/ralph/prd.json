@@ -357,6 +357,26 @@
       "notes": ""
     },
     {
+      "id": "US-018A",
+      "title": "Basic install.sh clone-build installer",
+      "description": "Source: operational ordering request. As a maintainer, I want a basic clone-build install.sh before more feature work so every subsequent story can smoke-test the installed binary.",
+      "acceptanceCriteria": [
+        "Author `install.sh` at repo root for the clone-build path only; the full curl/GitHub Releases installer remains in US-043.",
+        "Script requires `Cargo.toml` next to the script and exits non-zero with a clear message if run outside a source checkout.",
+        "Script runs a release compile before installing: `RUSTFLAGS=\"-D warnings\" cargo build --release`.",
+        "Script copies `target/release/discuss` to `${DISCUSS_INSTALL_DIR:-/usr/local/bin}/discuss`, creating the install directory if needed and preserving executable permissions.",
+        "Script prints the installed path and verifies the installed binary by running `discuss --version` from that path.",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
+      ],
+      "priority": 18.5,
+      "passes": true,
+      "notes": ""
+    },
+    {
       "id": "US-019",
       "title": "POST /api/threads — create user thread",
       "description": "Source: PRD US-005 acceptance criterion 1 (FR-8, FR-9). As the browser (or agent), I want to POST a new thread and have it persisted, broadcast over SSE, and emitted as a stdout event in one shot.",
@@ -369,7 +389,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 19,
       "passes": false,
@@ -389,7 +410,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 20,
       "passes": false,
@@ -409,7 +431,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 21,
       "passes": false,
@@ -429,7 +452,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 22,
       "passes": false,
@@ -449,7 +473,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 23,
       "passes": false,
@@ -469,7 +494,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 24,
       "passes": false,
@@ -489,7 +515,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 25,
       "passes": false,
@@ -509,7 +536,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 26,
       "passes": false,
@@ -527,7 +555,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 27,
       "passes": false,
@@ -546,7 +575,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 28,
       "passes": false,
@@ -565,7 +595,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 29,
       "passes": false,
@@ -584,7 +615,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 30,
       "passes": false,
@@ -604,7 +636,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 31,
       "passes": false,
@@ -623,7 +656,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 32,
       "passes": false,
@@ -642,7 +676,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 33,
       "passes": false,
@@ -662,7 +697,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 34,
       "passes": false,
@@ -680,7 +716,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 35,
       "passes": false,
@@ -700,7 +737,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 36,
       "passes": false,
@@ -719,7 +757,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 37,
       "passes": false,
@@ -739,7 +778,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 38,
       "passes": false,
@@ -758,7 +798,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 39,
       "passes": false,
@@ -778,7 +819,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 40,
       "passes": false,
@@ -798,7 +840,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 41,
       "passes": false,
@@ -817,7 +860,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 42,
       "passes": false,
@@ -840,7 +884,8 @@
         "`cargo fmt --check` passes (no Rust changes expected; this gate is a sanity check that nothing else regressed)",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 43,
       "passes": false,
@@ -860,7 +905,8 @@
         "`cargo fmt --check` still passes locally",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 44,
       "passes": false,
@@ -878,7 +924,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 45,
       "passes": false,
@@ -899,7 +946,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 46,
       "passes": false,
@@ -920,7 +968,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 47,
       "passes": false,
@@ -943,7 +992,8 @@
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
         "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it using `DISCUSS_INSTALL_DIR=\"$(mktemp -d)\" ./install.sh` and verify the installed `discuss --version` works."
       ],
       "priority": 48,
       "passes": false,
