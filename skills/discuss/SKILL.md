@@ -64,17 +64,11 @@ Post a short message to chat:
 
 ## Step 3: Event loop
 
-Keep calling Monitor on the task. Each stdout line is one JSON event.
+Keep calling Monitor on the task. Each stdout line is one JSON event. Takes and drafts are broadcast via SSE only (not stdout), so your own `/takes` writes never echo back — no self-echo tracking needed.
 
-### Events to ignore
+Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.deleted`. Lifecycle events (`session.started`, `session.done`, `thread.unresolved`, `prompt.suggest_done`) are informational — acknowledge in chat if useful but don't post to the API.
 
-- `draft.updated` — fires per keystroke, pure noise. Discard immediately.
-- `draft.cleared` — informational, no action needed.
-- `take.added` or `thread.created` whose `id` is in your *self-posted set* (see Step 4).
-
-### Events to act on
-
-**`thread.created`** (new thread opened by the user)
+### `thread.created` (new thread opened by the user)
 
 1. Read `anchorStart`, `anchorEnd`, `snippet`, `text` from the payload.
 2. Locate the anchored region in the markdown source — the `snippet` is a reliable search key for the rendered paragraph.
@@ -88,34 +82,20 @@ curl -s -X POST "$URL/api/threads/<thread-id>/takes" \
   -d '{"text":"..."}'
 ```
 
-6. Record the returned `id` (e.g., `t-1`) in your self-posted set.
-
-**`reply.added`** (the user replied in a thread)
+### `reply.added` (the user replied in a thread)
 
 Replies come only from the human (the API uses `/replies` for humans, `/takes` for you). Any `reply.added` event is a new user message.
 
 1. Fetch full state: `curl -s "$URL/api/state"` — parse the thread and all its replies/takes in order.
 2. Read the latest reply in context.
 3. Decide: is this a question, a challenge, or a genuine opening for more commentary? If yes, post a follow-up take. If it's closure ("thanks", "got it", "makes sense"), stay silent.
-4. If responding, POST another take to the same thread and record the ID.
+4. If responding, POST another take to the same thread.
 
-**`take.added`** (self-echo of your own post)
-
-Your own POSTs to `/takes` are broadcast back to stdout. If the `id` is in your self-posted set, drop it. Otherwise it came from somewhere else — investigate, do not assume.
-
-**`thread.resolved`** / **`thread.deleted`**
+### `thread.resolved` / `thread.deleted`
 
 Acknowledge in chat ("`u-3` resolved" / "`u-2` deleted") but do not post anything to the thread.
 
-## Step 4: Self-echo tracking
-
-The server broadcasts every mutation to stdout regardless of source, so every take or thread you POST will echo back as an event. To avoid responding to yourself:
-
-- Maintain an in-memory set of IDs you posted (`t-1`, `t-2`, ...).
-- Add the `id` from each POST response to the set before you process the next Monitor event.
-- On every `take.added` / `thread.created` / `reply.added` event, skip if `id` is in the set.
-
-## Step 5: Stop conditions
+## Step 4: Stop conditions
 
 End the session and shut down when any of these happen:
 
@@ -146,12 +126,15 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 ## Stdout event kinds
 
 - `session.started` → `{url, source_file, started_at}`
+- `session.done` → `{}` — emitted when discuss exits cleanly
 - `thread.created` → `{id, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, createdAt}`
-- `reply.added` → `{id, threadId, text, createdAt}` — human reply
-- `take.added` → `{id, threadId, text, createdAt}` — agent take (possibly your own echo)
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
+- `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`
-- `draft.updated` / `draft.cleared` → `{scope, ...}` — ignore
+- `reply.added` → `{id, threadId, text, createdAt}` — human reply
+- `prompt.suggest_done` → lifecycle; informational
+
+**Not on stdout:** `take.added`, `draft.updated`, `draft.cleared` — these are SSE-only (browser UI), so they never surface here.
 
 ## Tone for takes
 
