@@ -84,6 +84,30 @@ fn cli_no_open_logs_listening_url_to_stderr() {
 }
 
 #[test]
+fn cli_update_requires_yes_when_stdin_is_not_tty() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("update")
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .output()
+        .expect("spawn discuss binary");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should be reserved for JSON events"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stderr.contains("stdin is not a TTY"));
+    assert!(stderr.contains("discuss update -y"));
+}
+
+#[test]
 fn cli_emits_single_session_started_event_after_listening() {
     let port = free_port();
     let temp_dir = tempdir().expect("tempdir should be created");

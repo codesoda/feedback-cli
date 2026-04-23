@@ -62,6 +62,9 @@ pub enum DiscussError {
         "update check failed: {message} - check your network connection or GitHub release metadata, then run `discuss update --check` again"
     )]
     UpdateCheckError { message: String },
+
+    #[error("update failed: {message}")]
+    UpdateError { message: String },
 }
 
 #[cfg(test)]
@@ -191,6 +194,16 @@ mod tests {
                 "network connection",
                 "discuss update --check",
             ],
+        );
+    }
+
+    #[test]
+    fn update_error_message_names_problem_and_suggestion() {
+        assert_display_contains(
+            DiscussError::UpdateError {
+                message: "stdin is not a TTY - rerun with `discuss update -y`".to_string(),
+            },
+            &["update failed", "stdin is not a TTY", "discuss update -y"],
         );
     }
 }

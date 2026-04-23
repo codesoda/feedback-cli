@@ -65,9 +65,18 @@ Updates are explicit-only: discuss never checks for updates automatically, so no
 pub struct UpdateArgs {
     #[arg(
         long,
+        conflicts_with = "yes",
         help = "Check GitHub Releases for a newer version. This is explicit-only; discuss never checks automatically."
     )]
     pub check: bool,
+
+    #[arg(
+        short = 'y',
+        long = "yes",
+        conflicts_with = "check",
+        help = "Download and install the latest release without an interactive prompt"
+    )]
+    pub yes: bool,
 }
 
 #[cfg(test)]
@@ -159,7 +168,10 @@ mod tests {
         assert!(args.file.is_none());
         assert!(matches!(
             args.command,
-            Some(Commands::Update(UpdateArgs { check: false }))
+            Some(Commands::Update(UpdateArgs {
+                check: false,
+                yes: false
+            }))
         ));
     }
 
@@ -170,8 +182,32 @@ mod tests {
 
         assert!(matches!(
             args.command,
-            Some(Commands::Update(UpdateArgs { check: true }))
+            Some(Commands::Update(UpdateArgs {
+                check: true,
+                yes: false
+            }))
         ));
+    }
+
+    #[test]
+    fn parses_update_yes_flag() {
+        let args = Args::try_parse_from(["discuss", "update", "-y"]).expect("update yes parses");
+
+        assert!(matches!(
+            args.command,
+            Some(Commands::Update(UpdateArgs {
+                check: false,
+                yes: true
+            }))
+        ));
+    }
+
+    #[test]
+    fn rejects_update_check_with_yes() {
+        let error = Args::try_parse_from(["discuss", "update", "--check", "--yes"])
+            .expect_err("check and yes should conflict");
+
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -219,6 +255,7 @@ mod tests {
             "Updates are explicit-only",
             "no env opt-out is needed",
             "--check",
+            "--yes",
         ] {
             assert!(
                 help.contains(expected),

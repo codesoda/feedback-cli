@@ -14,7 +14,8 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
         | DiscussError::FileNotReadable { .. }
         | DiscussError::RenderError { .. }
         | DiscussError::LoggingInitError { .. }
-        | DiscussError::UpdateCheckError { .. } => EXIT_GENERIC_FAILURE,
+        | DiscussError::UpdateCheckError { .. }
+        | DiscussError::UpdateError { .. } => EXIT_GENERIC_FAILURE,
     }
 }
 
@@ -83,6 +84,12 @@ mod tests {
             (
                 DiscussError::UpdateCheckError {
                     message: "GitHub did not return a Location header".to_string(),
+                },
+                EXIT_GENERIC_FAILURE,
+            ),
+            (
+                DiscussError::UpdateError {
+                    message: "stdin is not a TTY - rerun with `discuss update -y`".to_string(),
                 },
                 EXIT_GENERIC_FAILURE,
             ),

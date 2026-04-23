@@ -67,6 +67,8 @@ where
         Some(cli::Commands::Update(update_args)) => {
             if update_args.check {
                 eprintln!("{}", update::check()?);
+            } else {
+                eprintln!("{}", update::install(update_args.yes)?);
             }
 
             Ok(())

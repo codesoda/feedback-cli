@@ -3,24 +3,28 @@ use std::process::Command;
 use tempfile::tempdir;
 
 #[test]
-fn cli_tracing_writes_no_stdout_or_stderr_on_success() {
+fn cli_tracing_uses_file_logs_without_polluting_stderr() {
     let temp_home = tempdir().expect("temp home should be created");
+    let missing_path = temp_home.path().join("missing.md");
 
     let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
-        .arg("update")
+        .arg(&missing_path)
         .env("HOME", temp_home.path())
         .env("DISCUSS_LOG", "debug")
         .output()
         .expect("discuss should run");
 
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     assert!(
         output.stdout.is_empty(),
         "stdout should be reserved for events"
     );
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stderr.contains("file not found"));
     assert!(
-        output.stderr.is_empty(),
-        "stderr should not receive tracing output"
+        !stderr.contains("tracing initialized"),
+        "stderr should only contain the user-facing error"
     );
 
     let log_dir = temp_home.path().join(".discuss").join("logs");

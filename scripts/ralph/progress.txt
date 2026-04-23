@@ -7,6 +7,7 @@
 - GitHub Actions CI lives in `.github/workflows/ci.yml`; keep workflow-level `RUSTFLAGS="-D warnings"` and `CARGO_INCREMENTAL="0"`, and preserve the Rust step order `cargo fmt --check` -> `cargo clippy --all-targets -- -D warnings` -> `cargo build --all-targets` -> `cargo test`.
 - GitHub Actions release workflow lives in `.github/workflows/release.yml`; package `discuss-<tag>-<target>.tar.gz`, publish `checksums-sha256.txt`, and extract changelog notes by matching either `## [vX.Y.Z]` or `## [X.Y.Z]` headings so Keep a Changelog sections work with `v` tags.
 - `CHANGELOG.md` should follow Keep a Changelog headings; the current `awk '/^## \\[Unreleased\\]/,/^## \\[/' CHANGELOG.md` smoke check only proves the `## [Unreleased]` heading exists because the end pattern matches the same line.
+- Update logic lives in `src/update.rs`; keep checks explicit-only, fail fast on non-TTY installs unless `-y/--yes` is passed, resolve the latest tag via the GitHub `/releases/latest` redirect, verify `checksums-sha256.txt` against the downloaded tarball, and only then call `self_replace::self_replace`.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
@@ -437,4 +438,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: update logic is isolated in `src/update.rs`, and `update::check` should stay referenced only from the `discuss update` subcommand so the binary never performs passive update checks.
   - Gotchas encountered: installer smoke tests that override `HOME` need the real `RUSTUP_HOME` and `CARGO_HOME` preserved, otherwise source builds fail because rustup cannot find the configured toolchain.
   - Useful context: the update check uses the GitHub redirect trick (`/releases/latest` with redirects disabled) plus the `Location` header, so later download/install work can reuse the same latest-tag resolution path without an API token.
+---
+## 2026-04-23 18:20:58 AEST - US-048
+- Implemented `discuss update -y` with target-triple resolution, release asset/checksum downloads, sha256 verification, tarball extraction to a temp binary, and in-place replacement via `self_replace::self_replace`; also made plain `discuss update` require `-y` in non-TTY mode and prompt interactively on TTYs.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/cli.rs`, `src/error.rs`, `src/exit.rs`, `src/lib.rs`, `src/update.rs`, `tests/cli.rs`, `tests/logging.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: self-update stays in `src/update.rs`; resolve the latest tag through `/releases/latest`, derive `discuss-<tag>-<target>.tar.gz`, verify the downloaded tarball against `checksums-sha256.txt`, then replace the running binary from a temp file.
+  - Gotchas encountered: non-interactive `discuss update` should fail before any network work unless `-y/--yes` is passed, while the GitHub-release smoke depends on `/releases/latest` returning a redirect and therefore remains blocked until a real release is published.
+  - Useful context: verification passed with `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, `RUSTFLAGS="-D warnings" cargo test`, `./install.sh`, and `discuss --version` from PATH; manual `discuss update --check` / `discuss update -y` attempts currently fail because `https://github.com/chrisraethke/discuss-cli/releases/latest` did not return a `Location` header.
 ---
