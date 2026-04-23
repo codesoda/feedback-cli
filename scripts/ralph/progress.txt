@@ -13,6 +13,7 @@
 - Bundled browser assets live in `assets/` and are exposed through `src/assets.rs`; `render_page` inlines the Mermaid shim, while `assets::mermaid_js()` provides the minified asset for later static routes.
 - State protocol types live in `src/state/types.rs`; keep serde field names camelCase, serialize `ThreadId` transparently as a string, and encode new-thread draft anchor ranges as `"start-end"` JSON object keys.
 - Process-local review state lives in `src/state/store.rs`; use `State::new_shared()` for `Arc<RwLock<State>>`, mutate through typed accessors, and call `snapshot()` for the active browser/API state while soft-deleted threads stay preserved internally.
+- Stdout JSON events live in `src/events.rs`; route all machine-readable stdout writes through `EventEmitter` and keep human-readable output on stderr or tracing.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -103,4 +104,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: state store code should live in `src/state/store.rs`; handlers can use `State::new_shared()` for shared ownership and `snapshot()` when serializing active browser/API state.
   - Gotchas encountered: soft-deleted threads should be hidden from `get_threads()` and `snapshot()` but kept internally so future transcript/history stories can still account for them.
   - Useful context: `cargo-agent.sh` is still not present in this repo, so the exact strict Cargo commands from `AGENTS.md` remain the validation source of truth.
+---
+## 2026-04-23 13:04:28 AEST - US-012
+- Implemented the stdout event protocol with dotted event kind serialization, an `Event` envelope, and an immediately flushed newline-delimited `EventEmitter`.
+- Files changed: `src/events.rs`, `src/lib.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: stdout event types and writes should stay centralized in `src/events.rs`; use `EventEmitter::stdout()` for the real stream and `EventEmitter::new(writer)` for tests.
+  - Gotchas encountered: tests intentionally guard against `println!`, `print!`, and `io::stdout` outside `src/events.rs` so stderr output via `eprintln!` remains allowed while stdout stays machine-readable.
+  - Useful context: `EventKind::ALL` is kept next to the enum so future event additions can be covered by serialization tests.
 ---
