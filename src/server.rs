@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
+use tokio::time::MissedTickBehavior;
 use tower_http::trace::TraceLayer;
 
 use crate::assets;
@@ -28,11 +29,13 @@ use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
     Draft, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
 };
-use crate::{render, template, DiscussError, Result};
+use crate::{render, template, Config, DiscussError, Result};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
 const ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const MAX_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+const MIN_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -41,7 +44,8 @@ pub struct AppState {
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     markdown_source: Arc<str>,
     shutdown: ShutdownSignal,
-    last_heartbeat_at: Arc<Mutex<Instant>>,
+    activity: ActivityTracker,
+    idle_timeout_secs: Arc<AtomicU64>,
     next_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
     next_take_number: Arc<AtomicU64>,
@@ -59,7 +63,8 @@ impl AppState {
             emitter,
             markdown_source: Arc::from(""),
             shutdown: ShutdownSignal::new(),
-            last_heartbeat_at: Arc::new(Mutex::new(Instant::now())),
+            activity: ActivityTracker::new(),
+            idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
             next_take_number: Arc::new(AtomicU64::new(1)),
@@ -80,26 +85,33 @@ impl AppState {
         self
     }
 
+    pub fn with_idle_timeout_secs(self, idle_timeout_secs: u64) -> Self {
+        self.idle_timeout_secs
+            .store(idle_timeout_secs, Ordering::Relaxed);
+
+        self
+    }
+
     pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
         self.shutdown.subscribe()
     }
 
     pub fn last_heartbeat_at(&self) -> std::result::Result<Instant, String> {
-        self.last_heartbeat_at
-            .lock()
-            .map(|last_heartbeat_at| *last_heartbeat_at)
-            .map_err(|_| "heartbeat lock poisoned".to_string())
+        self.activity.last_heartbeat_at()
     }
 
     fn record_heartbeat(&self) -> std::result::Result<Instant, String> {
-        self.last_heartbeat_at
-            .lock()
-            .map(|mut last_heartbeat_at| {
-                let now = Instant::now();
-                *last_heartbeat_at = now;
-                now
-            })
-            .map_err(|_| "heartbeat lock poisoned".to_string())
+        self.activity.record_heartbeat()
+    }
+
+    fn record_mutation(&self) {
+        if let Err(error) = self.activity.record_mutation() {
+            tracing::warn!(error, "failed to update last mutation timestamp");
+        }
+    }
+
+    fn idle_timeout_secs(&self) -> u64 {
+        self.idle_timeout_secs.load(Ordering::Relaxed)
     }
 
     fn next_user_thread_id(&self) -> ThreadId {
@@ -118,6 +130,90 @@ impl AppState {
         let number = self.next_take_number.fetch_add(1, Ordering::Relaxed);
 
         format!("t-{number}")
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ActivityTracker {
+    inner: Arc<Mutex<ActivityState>>,
+}
+
+#[derive(Debug)]
+struct ActivityState {
+    last_heartbeat_at: Instant,
+    last_mutation_at: Instant,
+    last_idle_emit_at: Option<Instant>,
+}
+
+impl ActivityTracker {
+    fn new() -> Self {
+        let now = Instant::now();
+
+        Self {
+            inner: Arc::new(Mutex::new(ActivityState {
+                last_heartbeat_at: now,
+                last_mutation_at: now,
+                last_idle_emit_at: None,
+            })),
+        }
+    }
+
+    fn last_heartbeat_at(&self) -> std::result::Result<Instant, String> {
+        self.inner
+            .lock()
+            .map(|state| state.last_heartbeat_at)
+            .map_err(|_| "activity lock poisoned".to_string())
+    }
+
+    fn record_heartbeat(&self) -> std::result::Result<Instant, String> {
+        self.inner
+            .lock()
+            .map(|mut state| {
+                let now = Instant::now();
+                state.last_heartbeat_at = now;
+                now
+            })
+            .map_err(|_| "activity lock poisoned".to_string())
+    }
+
+    fn record_mutation(&self) -> std::result::Result<Instant, String> {
+        self.inner
+            .lock()
+            .map(|mut state| {
+                let now = Instant::now();
+                state.last_mutation_at = now;
+                now
+            })
+            .map_err(|_| "activity lock poisoned".to_string())
+    }
+
+    fn record_idle_prompt_if_due(
+        &self,
+        now: Instant,
+        idle_timeout: Duration,
+    ) -> std::result::Result<Option<Duration>, String> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| "activity lock poisoned".to_string())?;
+        let last_activity_at = state.last_heartbeat_at.max(state.last_mutation_at);
+        let idle_for = now.saturating_duration_since(last_activity_at);
+
+        if idle_for < idle_timeout {
+            return Ok(None);
+        }
+
+        if let Some(last_idle_emit_at) = state.last_idle_emit_at {
+            let already_emitted_for_current_window = last_idle_emit_at >= last_activity_at
+                && now.saturating_duration_since(last_idle_emit_at) < idle_timeout;
+            if already_emitted_for_current_window {
+                return Ok(None);
+            }
+        }
+
+        state.last_idle_emit_at = Some(now);
+
+        Ok(Some(idle_for))
     }
 }
 
@@ -173,6 +269,8 @@ where
     let listening_addr = listener.local_addr().unwrap_or(addr);
     on_ready(listening_addr);
 
+    spawn_idle_timer(app_state.clone());
+
     let router = build_router(app_state.clone());
     let shutdown_signal = app_state.shutdown.clone();
 
@@ -183,6 +281,68 @@ where
         })
         .await
         .map_err(|source| DiscussError::ServerBindError { addr, source })
+}
+
+fn spawn_idle_timer(app_state: AppState) {
+    let idle_timeout_secs = app_state.idle_timeout_secs();
+    if idle_timeout_secs == 0 {
+        return;
+    }
+
+    let idle_timeout = Duration::from_secs(idle_timeout_secs);
+    let mut shutdown = app_state.subscribe_shutdown();
+    let mut interval = tokio::time::interval(idle_check_interval(idle_timeout));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+                _ = interval.tick() => {
+                    emit_idle_prompt_if_due(&app_state, idle_timeout);
+                }
+            }
+        }
+    });
+}
+
+fn idle_check_interval(idle_timeout: Duration) -> Duration {
+    idle_timeout
+        .saturating_mul(2)
+        .clamp(MIN_IDLE_CHECK_INTERVAL, MAX_IDLE_CHECK_INTERVAL)
+}
+
+fn emit_idle_prompt_if_due(app_state: &AppState, idle_timeout: Duration) {
+    let idle_for = match app_state
+        .activity
+        .record_idle_prompt_if_due(Instant::now(), idle_timeout)
+    {
+        Ok(Some(idle_for)) => idle_for,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(error, "failed to read idle activity timestamps");
+            return;
+        }
+    };
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::PromptSuggestDone,
+        at: Utc::now(),
+        payload: serde_json::json!({
+            "idle_for_secs": idle_for.as_secs(),
+        }),
+    }) {
+        tracing::warn!(
+            error = %error,
+            "failed to emit prompt.suggest_done event"
+        );
+    }
 }
 
 fn build_router(app_state: AppState) -> Router {
@@ -362,6 +522,7 @@ async fn post_api_threads(
             "state lock poisoned while creating thread",
         );
     }
+    app_state.record_mutation();
 
     let payload = match serde_json::to_value(&thread) {
         Ok(payload) => payload,
@@ -451,6 +612,7 @@ async fn post_api_thread_replies(
             created_at: Utc::now(),
         })
     };
+    app_state.record_mutation();
 
     let payload = match serde_json::to_value(&reply) {
         Ok(payload) => payload,
@@ -536,6 +698,7 @@ async fn post_api_thread_takes(
             created_at: Utc::now(),
         })
     };
+    app_state.record_mutation();
 
     let payload = match serde_json::to_value(&take) {
         Ok(payload) => payload,
@@ -614,6 +777,7 @@ async fn post_api_thread_resolve(
             },
         )
     };
+    app_state.record_mutation();
 
     let payload = serde_json::json!({
         "threadId": thread_id,
@@ -670,6 +834,7 @@ async fn post_api_thread_unresolve(
 
         state.clear_resolution(&thread_id);
     }
+    app_state.record_mutation();
 
     let payload = serde_json::json!({ "threadId": thread_id });
 
@@ -731,6 +896,7 @@ async fn delete_api_thread(
 
         state.soft_delete_thread(&thread_id);
     }
+    app_state.record_mutation();
 
     let payload = serde_json::json!({ "threadId": thread_id });
 
@@ -799,6 +965,7 @@ async fn post_api_drafts_new_thread(
             "state lock poisoned while saving new-thread draft",
         );
     }
+    app_state.record_mutation();
 
     let response = NewThreadDraftResponse {
         scope: "newThread",
@@ -871,6 +1038,7 @@ fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequ
             "state lock poisoned while clearing new-thread draft",
         );
     }
+    app_state.record_mutation();
 
     let cleared = NewThreadDraftCleared {
         scope: "newThread",
@@ -967,6 +1135,7 @@ async fn post_api_drafts_followup(
             updated_at,
         }
     };
+    app_state.record_mutation();
     let payload = match serde_json::to_value(&response) {
         Ok(payload) => payload,
         Err(error) => {
@@ -1042,6 +1211,7 @@ fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest
 
         state.clear_followup_draft(&request.thread_id);
     }
+    app_state.record_mutation();
 
     let cleared = FollowupDraftCleared {
         scope: "followup",

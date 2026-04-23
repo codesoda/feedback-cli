@@ -66,7 +66,9 @@ where
             let port = config.port.unwrap_or(DEFAULT_PORT);
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
             let auto_open = config.auto_open;
-            let app_state = AppState::for_process().with_markdown_source(markdown_source);
+            let app_state = AppState::for_process()
+                .with_markdown_source(markdown_source)
+                .with_idle_timeout_secs(config.idle_timeout_secs);
             let emitter = app_state.emitter.clone();
 
             server::serve_with_ready(addr, app_state, shutdown, move |listening_addr| {

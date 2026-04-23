@@ -244,6 +244,112 @@ async fn post_api_heartbeat_updates_timestamp_silently() {
 }
 
 #[tokio::test]
+async fn idle_timer_emits_prompt_suggest_done_once_per_idle_window() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_idle_timeout_secs(1);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let events = wait_for_stdout_events(&stdout, 1, Duration::from_secs(3)).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["kind"], EventKind::PromptSuggestDone.to_string());
+    assert!(
+        events[0]["payload"]["idle_for_secs"]
+            .as_u64()
+            .expect("idle_for_secs should be an integer")
+            >= 1
+    );
+
+    let events = wait_for_stdout_events(&stdout, 2, Duration::from_secs(3)).await;
+    assert_eq!(events.len(), 2);
+    assert!(events
+        .iter()
+        .all(|event| event["kind"] == EventKind::PromptSuggestDone.to_string()));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn heartbeat_prevents_idle_prompt_suggest_done_event() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_idle_timeout_secs(1);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let heartbeat = tokio::spawn(async move {
+        loop {
+            let response = post_json_path(addr, "/api/heartbeat", "").await;
+            assert!(response.starts_with("HTTP/1.1 200"));
+            sleep(Duration::from_millis(500)).await;
+        }
+    });
+
+    sleep(Duration::from_secs(3)).await;
+    heartbeat.abort();
+    assert!(stdout_string(&stdout).is_empty());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn idle_timeout_zero_disables_prompt_suggest_done_event() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_idle_timeout_secs(0);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+    sleep(Duration::from_millis(1200)).await;
+
+    assert!(stdout_string(&stdout).is_empty());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn get_api_events_streams_published_broadcast_event() {
     let addr = free_loopback_addr();
     let app_state = AppState::for_process();
@@ -1952,6 +2058,33 @@ fn stdout_string(stdout: &Arc<Mutex<Vec<u8>>>) -> String {
         .clone();
 
     String::from_utf8(bytes).expect("stdout capture should be utf-8")
+}
+
+async fn wait_for_stdout_events(
+    stdout: &Arc<Mutex<Vec<u8>>>,
+    expected_count: usize,
+    max_wait: Duration,
+) -> Vec<Value> {
+    let deadline = tokio::time::Instant::now() + max_wait;
+
+    loop {
+        let output = stdout_string(stdout);
+        let events = output
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("stdout event should be JSON"))
+            .collect::<Vec<Value>>();
+
+        if events.len() >= expected_count {
+            return events;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {expected_count} stdout events; saw {}: {output}",
+            events.len()
+        );
+        sleep(Duration::from_millis(25)).await;
+    }
 }
 
 fn assert_js_headers(response: &str) {
