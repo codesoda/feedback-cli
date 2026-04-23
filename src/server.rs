@@ -2,7 +2,7 @@ use std::future::Future;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path as FsPath, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,6 +51,7 @@ pub struct AppState {
     markdown_source: Arc<str>,
     source_path: Arc<Option<PathBuf>>,
     history_dir: Arc<PathBuf>,
+    no_save: Arc<AtomicBool>,
     shutdown: ShutdownSignal,
     activity: ActivityTracker,
     idle_timeout_secs: Arc<AtomicU64>,
@@ -72,6 +73,7 @@ impl AppState {
             markdown_source: Arc::from(""),
             source_path: Arc::new(None),
             history_dir: Arc::new(history::default_history_dir()),
+            no_save: Arc::new(AtomicBool::new(false)),
             shutdown: ShutdownSignal::new(),
             activity: ActivityTracker::new(),
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
@@ -105,6 +107,12 @@ impl AppState {
         self
     }
 
+    pub fn with_no_save(self, no_save: bool) -> Self {
+        self.no_save.store(no_save, Ordering::Relaxed);
+
+        self
+    }
+
     pub fn with_idle_timeout_secs(self, idle_timeout_secs: u64) -> Self {
         self.idle_timeout_secs
             .store(idle_timeout_secs, Ordering::Relaxed);
@@ -132,6 +140,10 @@ impl AppState {
 
     fn idle_timeout_secs(&self) -> u64 {
         self.idle_timeout_secs.load(Ordering::Relaxed)
+    }
+
+    fn no_save(&self) -> bool {
+        self.no_save.load(Ordering::Relaxed)
     }
 
     fn next_user_thread_id(&self) -> ThreadId {
@@ -1322,13 +1334,15 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
         );
     }
 
-    let history_path = history::history_archive_path(
-        app_state.history_dir.as_ref().as_path(),
-        app_state.source_path.as_ref().as_deref(),
-        emitted_at,
-    );
-    if let Err(error) = history::write_history_archive(&history_path, &payload) {
-        warn_history_archive_failure(&history_path, &error);
+    if !app_state.no_save() {
+        let history_path = history::history_archive_path(
+            app_state.history_dir.as_ref().as_path(),
+            app_state.source_path.as_ref().as_deref(),
+            emitted_at,
+        );
+        if let Err(error) = history::write_history_archive(&history_path, &payload) {
+            warn_history_archive_failure(&history_path, &error);
+        }
     }
 
     app_state.record_mutation();

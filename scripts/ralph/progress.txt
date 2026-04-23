@@ -8,7 +8,7 @@
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
 - Use `Config::resolve(ConfigOverrides)` for full layered config resolution; file/env layers are partial so omitted keys do not reset lower-priority values.
-- Runtime launch resolves `--port`/`--no-open` through `ConfigOverrides` and binds exactly `127.0.0.1:<port-or-7777>` via `serve_with_ready`; do not add a free-port fallback because agent URLs must stay predictable.
+- Runtime launch resolves `--port`/`--no-open`/`--history-dir`/`--no-save` through `ConfigOverrides` and binds exactly `127.0.0.1:<port-or-7777>` via `serve_with_ready`; do not add a free-port fallback because agent URLs must stay predictable.
 - Browser launch/status helpers live in `src/launch.rs`; write the single `listening on http://127.0.0.1:<port>` line to stderr after bind, call `open::that` only when `auto_open` remains true, and log browser-open failures with tracing warnings instead of failing the session.
 - `discuss <file>` emits `session.started` from `src/lib.rs` inside the `serve_with_ready` readiness callback before stderr announcement/browser open; payload keys are `url`, `source_file`, and `started_at`.
 - Tracing initialization lives in `src/logging.rs`; it must use file-only output because stdout is reserved for JSON events and stderr is for human status.
@@ -38,7 +38,7 @@
 - Successful state-mutation handlers in `src/server.rs` must call the shared mutation timestamp updater after writing state so idle prompts are delayed by user/agent activity.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - `POST /api/done` in `src/server.rs` builds transcripts with `build_transcript(&State)`, emits the `session.done` stdout event, then signals internal graceful shutdown; future Done/history work should preserve that ordering around any archive write.
-- History archiving lives in `src/history.rs`; Done writes the transcript payload JSON to `<history_dir>/<sanitized-source-stem>/<ISO8601>.json` after stdout emission, and archive failures must warn to tracing/stderr without changing the `/api/done` response or shutdown.
+- History archiving lives in `src/history.rs`; Done emits `session.done` first, then writes the transcript payload JSON to `<history_dir>/<sanitized-source-stem>/<ISO8601>.json` unless `AppState::with_no_save(true)` disables archives, and archive failures must warn to tracing/stderr without changing the `/api/done` response or shutdown.
 - Browser Done completion keeps the legacy `#copy-all` id for styling, calls `/api/done`, then uses `markReviewComplete()` to close SSE/heartbeat, disable controls, show `#done-banner`, and suppress further mutations/events.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
@@ -385,4 +385,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: history path construction and archive writes live in `src/history.rs`; use `AppState::with_source_path(...)` and `AppState::with_history_dir(...)` to provide Done archive context in runtime/tests.
   - Gotchas encountered: Done must clone the transcript payload for stdout emission so the exact same JSON value can be written to history afterward; archive failure tests intentionally produce one stderr warning.
   - Useful context: verification passed with strict Cargo checks and installer smoke test; no browser testing was needed because this story only changes server-side Done/archive behavior.
+---
+## 2026-04-23 17:37:08 AEST - US-042
+- Implemented top-level `--no-save` and `--history-dir <path>` CLI controls, wired them through config resolution, and made Done skip only the history archive when saving is disabled.
+- Files changed: `src/cli.rs`, `src/lib.rs`, `src/server.rs`, `tests/cli.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: one-shot launch flags should flow through `ConfigOverrides` in `src/lib.rs`; server tests can use `AppState::with_no_save(true)` to verify archive suppression without changing transcript emission.
+  - Gotchas encountered: `session.done` must still emit before the optional archive branch, so `--no-save` affects disk only and not the agent stdout contract.
+  - Useful context: verification passed with strict Cargo checks, CLI integration tests for archive override/suppression, `./install.sh`, and `discuss --version` from PATH.
 ---

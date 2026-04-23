@@ -1919,6 +1919,49 @@ async fn post_api_done_history_write_failure_still_succeeds_and_shutdown_exits()
 }
 
 #[tokio::test]
+async fn post_api_done_no_save_emits_transcript_without_history_archive() {
+    let addr = free_loopback_addr();
+    let history_dir = tempfile::tempdir().expect("history tempdir");
+    let state = State::new_shared();
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread("u-done", 3));
+    }
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        state,
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_source_path("review.md")
+    .with_history_dir(history_dir.path())
+    .with_no_save(true)
+    .with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, pending()));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/done", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    let stdout = stdout_string(&stdout);
+    assert_eq!(stdout.lines().count(), 1);
+    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::SessionDone.to_string());
+    assert!(
+        !history_dir.path().join("review").exists(),
+        "no_save should suppress history archive writes"
+    );
+}
+
+#[tokio::test]
 async fn busy_port_maps_to_port_in_use() {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind busy listener");
     let addr = listener.local_addr().expect("busy listener addr");

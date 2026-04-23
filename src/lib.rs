@@ -47,12 +47,16 @@ where
     let cli::Args {
         port,
         no_open,
+        no_save,
+        history_dir,
         file,
         command,
     } = args;
     let config = Config::resolve(ConfigOverrides {
         port,
         auto_open: no_open.then_some(false),
+        history_dir,
+        no_save: no_save.then_some(true),
         ..ConfigOverrides::default()
     })?;
     init_tracing(&config)?;
@@ -72,6 +76,7 @@ where
             let mut app_state = AppState::for_process()
                 .with_markdown_source(markdown_source)
                 .with_source_path(file.clone())
+                .with_no_save(config.no_save)
                 .with_idle_timeout_secs(config.idle_timeout_secs);
             if let Some(history_dir) = config.history_dir.clone() {
                 app_state = app_state.with_history_dir(history_dir);

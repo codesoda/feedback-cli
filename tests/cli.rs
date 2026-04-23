@@ -1,6 +1,7 @@
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read};
-use std::net::{Ipv4Addr, TcpListener};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -135,6 +136,114 @@ fn cli_emits_single_session_started_event_after_listening() {
     );
 }
 
+#[test]
+fn cli_history_dir_flag_overrides_config_history_dir_and_writes_archive() {
+    let port = free_port();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    let discuss_dir = home_dir.join(".discuss");
+    fs::create_dir_all(&discuss_dir).expect("home config dir should be created");
+    let config_history_dir = temp_dir.path().join("config-history");
+    fs::write(
+        discuss_dir.join("discuss.config.toml"),
+        format!("history_dir = \"{}\"\n", config_history_dir.display()),
+    )
+    .expect("user config should be written");
+    let cli_history_dir = temp_dir.path().join("cli-history");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(&markdown_path, "# Review\n").expect("markdown file should be written");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--history-dir")
+        .arg(&cli_history_dir)
+        .arg(&markdown_path)
+        .current_dir(temp_dir.path())
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .env_remove("DISCUSS_HISTORY_DIR")
+        .env_remove("DISCUSS_NO_SAVE")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn discuss binary");
+    let stderr = child.stderr.take().expect("stderr pipe should be present");
+    let line_rx = read_first_line(stderr);
+
+    let line = line_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("listening line should be written")
+        .expect("stderr line should be readable");
+    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+
+    let response = post_done(port);
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "done response should be 200, got {response:?}"
+    );
+    let output = wait_with_timeout(child, Duration::from_secs(2));
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_session_done_emitted(&output);
+    assert_eq!(json_files_in(&cli_history_dir.join("review")).len(), 1);
+    assert!(
+        json_files_in(&config_history_dir.join("review")).is_empty(),
+        "--history-dir should override configured history_dir"
+    );
+}
+
+#[test]
+fn cli_no_save_flag_suppresses_history_archive() {
+    let port = free_port();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let history_dir = temp_dir.path().join("history");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(&markdown_path, "# Review\n").expect("markdown file should be written");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg("--no-save")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--history-dir")
+        .arg(&history_dir)
+        .arg(&markdown_path)
+        .current_dir(temp_dir.path())
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .env_remove("DISCUSS_NO_SAVE")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn discuss binary");
+    let stderr = child.stderr.take().expect("stderr pipe should be present");
+    let line_rx = read_first_line(stderr);
+
+    let line = line_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("listening line should be written")
+        .expect("stderr line should be readable");
+    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+
+    let response = post_done(port);
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "done response should be 200, got {response:?}"
+    );
+    let output = wait_with_timeout(child, Duration::from_secs(2));
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_session_done_emitted(&output);
+    assert!(
+        json_files_in(&history_dir.join("review")).is_empty(),
+        "--no-save should suppress history archive writes"
+    );
+}
+
 fn free_port() -> u16 {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind free listener");
 
@@ -164,6 +273,44 @@ fn kill_and_collect(mut child: Child) -> Output {
 
 fn assert_rfc3339(value: &str) {
     DateTime::parse_from_rfc3339(value).expect("timestamp should be RFC3339");
+}
+
+fn post_done(port: u16) -> String {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect to discuss");
+    let request = "POST /api/done HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    stream
+        .write_all(request.as_bytes())
+        .expect("write done request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read done response");
+    response
+}
+
+fn assert_session_done_emitted(output: &Output) {
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout should be utf-8");
+    let events = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("stdout line should be JSON"))
+        .collect::<Vec<_>>();
+
+    assert!(
+        events.iter().any(|event| event["kind"] == "session.done"),
+        "stdout should contain session.done event, got {stdout}"
+    );
+}
+
+fn json_files_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .map(|entry| entry.expect("history entry should be readable").path())
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("json"))
+        .collect()
 }
 
 fn wait_with_timeout(mut child: Child, duration: Duration) -> Output {

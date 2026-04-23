@@ -34,6 +34,16 @@ pub struct Args {
     #[arg(long, help = "Do not open the browser after the server starts")]
     pub no_open: bool,
 
+    #[arg(long, help = "Do not write a history archive when the review is done")]
+    pub no_save: bool,
+
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write history archives under this directory for this invocation"
+    )]
+    pub history_dir: Option<PathBuf>,
+
     #[arg(value_name = "FILE", help = "Markdown file to review")]
     pub file: Option<PathBuf>,
 
@@ -69,6 +79,8 @@ mod tests {
 
         assert_eq!(args.port, None);
         assert!(!args.no_open);
+        assert!(!args.no_save);
+        assert_eq!(args.history_dir, None);
         assert_eq!(args.file, Some(PathBuf::from("plan.md")));
         assert!(args.command.is_none());
     }
@@ -80,6 +92,8 @@ mod tests {
 
         assert_eq!(args.port, Some(8888));
         assert!(!args.no_open);
+        assert!(!args.no_save);
+        assert_eq!(args.history_dir, None);
         assert_eq!(args.file, Some(PathBuf::from("plan.md")));
     }
 
@@ -89,6 +103,27 @@ mod tests {
             .expect("no-open arg should parse");
 
         assert!(args.no_open);
+        assert!(!args.no_save);
+        assert_eq!(args.history_dir, None);
+        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+    }
+
+    #[test]
+    fn parses_history_archive_flags() {
+        let args = Args::try_parse_from([
+            "discuss",
+            "--no-save",
+            "--history-dir",
+            "/tmp/discuss-history",
+            "plan.md",
+        ])
+        .expect("history archive flags should parse");
+
+        assert!(args.no_save);
+        assert_eq!(
+            args.history_dir,
+            Some(PathBuf::from("/tmp/discuss-history"))
+        );
         assert_eq!(args.file, Some(PathBuf::from("plan.md")));
     }
 
@@ -106,6 +141,8 @@ mod tests {
 
         assert_eq!(args.port, None);
         assert!(!args.no_open);
+        assert!(!args.no_save);
+        assert_eq!(args.history_dir, None);
         assert!(args.file.is_none());
         assert!(matches!(args.command, Some(Commands::Update)));
     }
@@ -123,6 +160,8 @@ mod tests {
             "5  Interrupted",
             "Docs:",
             "LLM ref:",
+            "--no-save",
+            "--history-dir",
         ] {
             assert!(
                 help.contains(expected),
