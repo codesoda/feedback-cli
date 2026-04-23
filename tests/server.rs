@@ -523,6 +523,147 @@ async fn post_api_thread_replies_returns_structured_400_for_empty_text() {
 }
 
 #[tokio::test]
+async fn post_api_thread_takes_appends_take_and_emits_events() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let thread_id = ThreadId("u-take".to_string());
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread("u-take", 2));
+    }
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = post_json_path(
+        addr,
+        "/api/threads/u-take/takes",
+        r#"{"text":"Agent recommends tightening this section"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["id"], "t-1");
+    assert_eq!(body["threadId"], "u-take");
+    assert_eq!(body["text"], "Agent recommends tightening this section");
+    assert!(body["createdAt"].as_str().is_some());
+
+    let snapshot = state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot();
+    let takes = snapshot
+        .takes
+        .get(&thread_id)
+        .expect("thread should have takes");
+    assert_eq!(takes.len(), 1);
+    assert_eq!(takes[0].id, "t-1");
+    assert_eq!(takes[0].thread_id, thread_id);
+    assert_eq!(takes[0].text, "Agent recommends tightening this section");
+
+    let sse_event = read_until(&mut sse, "\n\n").await;
+    assert!(sse_event.contains("event: take.added"));
+    assert!(sse_event.contains("\"id\":\"t-1\""));
+    assert!(sse_event.contains("\"threadId\":\"u-take\""));
+    assert!(sse_event.contains("\"text\":\"Agent recommends tightening this section\""));
+
+    let stdout = stdout_string(&stdout);
+    assert_eq!(stdout.lines().count(), 1);
+    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::TakeAdded.to_string());
+    assert_eq!(emitted["payload"]["id"], "t-1");
+    assert_eq!(emitted["payload"]["threadId"], "u-take");
+    assert_eq!(
+        emitted["payload"]["text"],
+        "Agent recommends tightening this section"
+    );
+    assert_eq!(emitted["payload"]["createdAt"], body["createdAt"]);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_thread_takes_returns_structured_404_for_unknown_thread() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/threads/missing/takes", r#"{"text":"Take"}"#).await;
+    assert!(response.starts_with("HTTP/1.1 404"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "not_found");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("message string")
+        .contains("missing"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_thread_takes_returns_structured_400_for_empty_text() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process();
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        state.add_thread(thread("u-take", 2));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/threads/u-take/takes", r#"{"text":"   "}"#).await;
+    assert!(response.starts_with("HTTP/1.1 400"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "validation_error");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("message string")
+        .contains("text"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn post_api_threads_returns_structured_400_for_missing_fields() {
     let addr = free_loopback_addr();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

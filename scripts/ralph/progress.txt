@@ -195,3 +195,11 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Gotchas encountered: axum 0.8 route parameters use `{id}` syntax even when PRD labels endpoints as `:id`; clippy denies needless references in equality comparisons.
   - Useful context: reply IDs are process-local `r-<n>` counters on `AppState`; future take endpoints can mirror this with their own counter.
 ---
+## 2026-04-23 13:59:20 AEST - US-021
+- Implemented `POST /api/threads/{id}/takes` for appending model takes to active threads, including structured 404/400 errors, state insertion, SSE broadcast, and stdout `take.added` emission.
+- Files changed: `src/server.rs`, `tests/server.rs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: take mutation handlers mirror reply handlers but use independent `t-<n>` process-local IDs from `AppState`.
+  - Gotchas encountered: existing child-route validation via `State::get_threads()` already excludes unknown and soft-deleted threads, so take handlers should use the same active-thread check as replies.
+  - Useful context: installer verification was run with a temporary `DISCUSS_INSTALL_DIR` and that directory prepended to `PATH` to avoid writing to `/usr/local/bin` while still checking `discuss --version` from PATH.
+---
