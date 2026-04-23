@@ -12,7 +12,7 @@ use axum::http::header;
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Json;
 use axum::Router;
 use chrono::{DateTime, Utc};
@@ -153,6 +153,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/state", get(get_api_state))
         .route("/api/events", get(get_api_events))
         .route("/api/threads", post(post_api_threads))
+        .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
         .route("/api/threads/{id}/takes", post(post_api_thread_takes))
         .route("/api/threads/{id}/resolve", post(post_api_thread_resolve))
@@ -577,6 +578,67 @@ async fn post_api_thread_unresolve(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             format!("failed to emit thread.unresolved event: {error}"),
+        );
+    }
+
+    Json(OkResponse { ok: true }).into_response()
+}
+
+async fn delete_api_thread(
+    AxumState(app_state): AxumState<AppState>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    let thread_id = ThreadId(thread_id);
+    let emitted_at = Utc::now();
+
+    {
+        let Ok(mut state) = app_state.state.write() else {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while deleting thread",
+            );
+        };
+
+        let Some(thread) = state
+            .get_threads()
+            .into_iter()
+            .find(|thread| thread.id == thread_id)
+        else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("thread not found: {}", thread_id.0),
+            );
+        };
+
+        if thread.kind == ThreadKind::Prepopulated {
+            return api_error_response(
+                StatusCode::FORBIDDEN,
+                "prepopulated_thread",
+                format!("prepopulated thread cannot be deleted: {}", thread_id.0),
+            );
+        }
+
+        state.soft_delete_thread(&thread_id);
+    }
+
+    let payload = serde_json::json!({ "threadId": thread_id });
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::ThreadDeleted.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::ThreadDeleted,
+        at: emitted_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit thread.deleted event: {error}"),
         );
     }
 

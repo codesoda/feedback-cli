@@ -864,6 +864,146 @@ async fn post_api_thread_unresolve_clears_resolution_idempotently_and_emits_even
 }
 
 #[tokio::test]
+async fn delete_api_thread_soft_deletes_user_thread_and_emits_events() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread("u-delete", 2));
+    }
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = delete_path(addr, "/api/threads/u-delete").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    assert_eq!(response_json(&response), json!({ "ok": true }));
+    assert!(state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot()
+        .threads
+        .is_empty());
+
+    let sse_event = read_until(&mut sse, "\n\n").await;
+    assert!(sse_event.contains("event: thread.deleted"));
+    assert!(sse_event.contains("\"threadId\":\"u-delete\""));
+
+    let stdout = stdout_string(&stdout);
+    assert_eq!(stdout.lines().count(), 1);
+    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::ThreadDeleted.to_string());
+    assert_eq!(emitted["payload"]["threadId"], "u-delete");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn delete_api_thread_rejects_prepopulated_thread_without_events() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread_with_kind("p-delete", 2, ThreadKind::Prepopulated));
+    }
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = delete_path(addr, "/api/threads/p-delete").await;
+    assert!(response.starts_with("HTTP/1.1 403"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "prepopulated_thread");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("message string")
+        .contains("p-delete"));
+    assert_eq!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .threads
+            .len(),
+        1
+    );
+
+    assert_no_sse_event(&mut sse).await;
+    assert!(stdout_string(&stdout).is_empty());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn delete_api_thread_returns_structured_404_for_unknown_thread() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    );
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = delete_path(addr, "/api/threads/missing").await;
+    assert!(response.starts_with("HTTP/1.1 404"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "not_found");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("message string")
+        .contains("missing"));
+    assert!(stdout_string(&stdout).is_empty());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn post_api_thread_resolution_routes_return_structured_404_for_unknown_thread() {
     let addr = free_loopback_addr();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -1082,6 +1222,22 @@ async fn post_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
     response
 }
 
+async fn delete_path(addr: SocketAddr, path: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!("DELETE {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
+}
+
 async fn open_get_path(addr: SocketAddr, path: &str) -> TcpStream {
     let mut stream = TcpStream::connect(addr).await.expect("connect to server");
     let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
@@ -1163,6 +1319,13 @@ async fn read_until(stream: &mut TcpStream, needle: &str) -> String {
     String::from_utf8(response).expect("response should be utf-8")
 }
 
+async fn assert_no_sse_event(stream: &mut TcpStream) {
+    let mut chunk = [0; 128];
+    let read = timeout(Duration::from_millis(100), stream.read(&mut chunk)).await;
+
+    assert!(read.is_err(), "unexpected SSE bytes: {read:?}");
+}
+
 fn timestamp(second: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 23, 2, 30, second)
         .single()
@@ -1170,6 +1333,10 @@ fn timestamp(second: u32) -> DateTime<Utc> {
 }
 
 fn thread(id: &str, anchor_start: usize) -> Thread {
+    thread_with_kind(id, anchor_start, ThreadKind::User)
+}
+
+fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
     Thread {
         id: ThreadId(id.to_string()),
         anchor_start,
@@ -1178,7 +1345,7 @@ fn thread(id: &str, anchor_start: usize) -> Thread {
         breadcrumb: "Overview".to_string(),
         text: format!("thread {id}"),
         created_at: timestamp(0),
-        kind: ThreadKind::User,
+        kind,
     }
 }
 

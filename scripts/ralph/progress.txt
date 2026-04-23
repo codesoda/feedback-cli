@@ -25,6 +25,7 @@
 - Axum 0.8 dynamic path segments use `{id}` route syntax (for example `/api/threads/{id}/replies`), not legacy `:id`.
 - Child thread mutation routes should verify the target thread is present in `State::get_threads()` before writing child state; unknown or inactive IDs return structured 404 JSON.
 - Resolution mutation events must include `threadId`; `thread.resolved` payloads also include the stored `resolution` object for browser state updates.
+- Thread deletion is a soft delete for active user threads only; prepopulated threads return structured 403 code `prepopulated_thread`, and `thread.deleted` payloads use `threadId`.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -211,4 +212,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: resolution event payloads should carry `threadId`, and resolved events should nest the stored `resolution` so the frontend can update the resolutions map directly.
   - Gotchas encountered: unresolve has no request body, but the raw HTTP test helper can still send a zero-length JSON request to exercise the route.
   - Useful context: the installer smoke test with `DISCUSS_INSTALL_DIR="$(mktemp -d)" ./install.sh` verifies the installed binary by running its absolute path, so the temp directory does not need to be on `PATH`.
+---
+## 2026-04-23 14:12:01 AEST - US-023
+- Implemented `DELETE /api/threads/{id}` for user-thread soft deletion with prepopulated-thread protection.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: deletion uses `State::soft_delete_thread` after validating the active thread from `State::get_threads()`, so deleted threads disappear from snapshots while remaining available internally for transcript work.
+  - Gotchas encountered: prepopulated threads must fail before mutation or event emission; tests should assert both empty stdout and no SSE event.
+  - Useful context: the delete event payload is `{ "threadId": "<id>" }`, matching resolution/unresolution payload conventions for frontend incremental updates.
 ---
