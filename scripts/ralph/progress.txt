@@ -11,6 +11,7 @@
 - Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
 - Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
 - Bundled browser assets live in `assets/` and are exposed through `src/assets.rs`; `render_page` inlines the Mermaid shim, while `assets::mermaid_js()` provides the minified asset for later static routes.
+- Static browser asset routes live in `src/server.rs`; keep them exact-path, serve from `src/assets.rs`, and include `Cache-Control: public, max-age=86400`.
 - State protocol types live in `src/state/types.rs`; keep serde field names camelCase, serialize `ThreadId` transparently as a string, and encode new-thread draft anchor ranges as `"start-end"` JSON object keys.
 - Process-local review state lives in `src/state/store.rs`; use `State::new_shared()` for `Arc<RwLock<State>>`, mutate through typed accessors, and call `snapshot()` for the active browser/API state while soft-deleted threads stay preserved internally.
 - Stdout JSON events live in `src/events.rs`; route all machine-readable stdout writes through `EventEmitter` and keep human-readable output on stderr or tracing.
@@ -139,4 +140,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: attach markdown source to `AppState` with `with_markdown_source(...)`; route handlers should snapshot shared state before serializing browser-facing JSON.
   - Gotchas encountered: existing server tests expected the placeholder 404, so future route stories should update graceful-shutdown assertions to match the real route status.
   - Useful context: no browser testing tool was available; HTML rendering and reload state seeding are covered by integration tests.
+---
+## 2026-04-23 13:30:32 AEST - US-016
+- Implemented exact static asset routes for `/assets/mermaid.min.js` and `/assets/mermaid-shim.js`, including JavaScript content type and long-cache headers.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: static browser assets should continue to be served through exact Axum routes in `src/server.rs` from `src/assets.rs`, not via filesystem directory serving.
+  - Gotchas encountered: raw HTTP integration tests can reuse the existing `TcpStream` helper pattern; add path support there instead of introducing a new test HTTP client dependency.
+  - Useful context: unknown `/assets/*` paths naturally hit the existing fallback 404, satisfying the no-directory-listing requirement.
 ---

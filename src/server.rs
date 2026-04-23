@@ -13,10 +13,14 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 
+use crate::assets;
 use crate::events::EventEmitter;
 use crate::sse::EventBus;
 use crate::state::{SharedState, State};
 use crate::{render, template, DiscussError, Result};
+
+const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
+const ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
 
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -108,6 +112,8 @@ where
 fn build_router(app_state: AppState) -> Router {
     Router::new()
         .route("/", get(get_root))
+        .route("/assets/mermaid.min.js", get(get_mermaid_js))
+        .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .fallback(not_found)
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)
@@ -139,6 +145,25 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         &rendered_markdown,
         &initial_state_json,
     ))
+}
+
+async fn get_mermaid_js() -> impl IntoResponse {
+    javascript_response(assets::mermaid_js())
+}
+
+async fn get_mermaid_shim_js() -> impl IntoResponse {
+    javascript_response(assets::mermaid_shim_js())
+}
+
+fn javascript_response(body: &'static str) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, JAVASCRIPT_CONTENT_TYPE),
+            (header::CACHE_CONTROL, ASSET_CACHE_CONTROL),
+        ],
+        body,
+    )
 }
 
 async fn not_found() -> StatusCode {

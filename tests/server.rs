@@ -3,6 +3,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
+use discuss::assets;
 use discuss::state::{Thread, ThreadId, ThreadKind};
 use discuss::{serve, AppState, DiscussError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -142,6 +143,75 @@ async fn rejects_non_loopback_bind_addr() {
     ));
 }
 
+#[tokio::test]
+async fn get_mermaid_js_asset_returns_bundled_bytes_with_cache_headers() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/assets/mermaid.min.js").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_js_headers(&response);
+    assert!(response_body(&response).starts_with(&assets::mermaid_js()[..20]));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_mermaid_shim_asset_returns_bundled_shim() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/assets/mermaid-shim.js").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_js_headers(&response);
+    let body = response_body(&response);
+    assert!(body.contains("language-mermaid"));
+    assert!(body.contains("/assets/mermaid.min.js"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn unknown_asset_path_returns_404() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/assets/nope.js").await;
+    assert!(response.starts_with("HTTP/1.1 404"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("allocate free port");
     listener.local_addr().expect("free listener addr")
@@ -163,9 +233,14 @@ async fn wait_for_server(addr: SocketAddr) {
 }
 
 async fn get_root(addr: SocketAddr) -> String {
+    get_path(addr, "/").await
+}
+
+async fn get_path(addr: SocketAddr, path: &str) -> String {
     let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
     stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .write_all(request.as_bytes())
         .await
         .expect("write request");
 
@@ -175,6 +250,12 @@ async fn get_root(addr: SocketAddr) -> String {
         .await
         .expect("read response");
     response
+}
+
+fn assert_js_headers(response: &str) {
+    let headers = response.to_ascii_lowercase();
+    assert!(headers.contains("content-type: application/javascript"));
+    assert!(headers.contains("cache-control: public, max-age=86400"));
 }
 
 fn timestamp(second: u32) -> DateTime<Utc> {
