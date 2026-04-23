@@ -41,6 +41,26 @@ impl State {
             .collect()
     }
 
+    pub(crate) fn all_threads(&self) -> &[Thread] {
+        &self.threads
+    }
+
+    pub(crate) fn replies_for_thread(&self, thread_id: &ThreadId) -> Vec<Reply> {
+        self.replies.get(thread_id).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn takes_for_thread(&self, thread_id: &ThreadId) -> Vec<Take> {
+        self.takes.get(thread_id).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn resolution_for_thread(&self, thread_id: &ThreadId) -> Option<Resolution> {
+        self.resolutions.get(thread_id).cloned()
+    }
+
+    pub(crate) fn deleted_at_for_thread(&self, thread_id: &ThreadId) -> Option<DateTime<Utc>> {
+        self.deleted_at.get(thread_id).copied()
+    }
+
     pub fn add_thread(&mut self, thread: Thread) -> Thread {
         self.threads.push(thread.clone());
         thread

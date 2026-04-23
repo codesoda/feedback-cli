@@ -19,6 +19,7 @@ pub mod server;
 pub mod sse;
 pub mod state;
 pub mod template;
+pub mod transcript;
 
 pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
@@ -30,6 +31,7 @@ pub use render::render;
 pub use server::{serve, serve_with_ready, AppState};
 pub use sse::{BroadcastEvent, EventBus};
 pub use template::render_page;
+pub use transcript::{build_transcript, Transcript, TranscriptThread};
 
 pub const DEFAULT_PORT: u16 = 7777;
 

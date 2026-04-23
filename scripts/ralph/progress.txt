@@ -19,6 +19,7 @@
 - Static browser asset routes live in `src/server.rs`; keep them exact-path, serve from `src/assets.rs`, and include `Cache-Control: public, max-age=86400`.
 - State protocol types live in `src/state/types.rs`; keep serde field names camelCase, serialize `ThreadId` transparently as a string, and encode new-thread draft anchor ranges as `"start-end"` JSON object keys.
 - Process-local review state lives in `src/state/store.rs`; use `State::new_shared()` for `Arc<RwLock<State>>`, mutate through typed accessors, and call `snapshot()` for the active browser/API state while soft-deleted threads stay preserved internally.
+- Transcript building lives in `src/transcript.rs`; use `build_transcript(&State)` for Done/history payloads so all threads, including soft-deleted ones, are emitted in document order.
 - Stdout JSON events live in `src/events.rs`; route all machine-readable stdout writes through `EventEmitter` and keep human-readable output on stderr or tracing.
 - Browser SSE broadcasts live in `src/sse.rs`; use `EventBus` as an `Arc`-friendly Tokio broadcast wrapper alongside `SharedState`, and keep `BroadcastEvent` distinct from stdout `Event`.
 - Axum server bootstrap lives in `src/server.rs`; use `AppState::for_process()` for production shared state and `serve(addr, app_state, shutdown)` for the 127.0.0.1-only graceful server wrapper.
@@ -32,6 +33,8 @@
 - There is no v1 delete-reply endpoint, so the browser should not offer local-only follow-up deletion unless a matching REST API is added.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
 - Browser heartbeat lives in `src/server.rs` at `POST /api/heartbeat` and updates `AppState::last_heartbeat_at()` silently; do not emit SSE broadcasts or stdout events for heartbeat pings.
+- Idle detection is configured on `AppState` with `with_idle_timeout_secs(...)`; `0` disables the server-start idle task, and `prompt.suggest_done` is stdout-only rather than an SSE broadcast.
+- Successful state-mutation handlers in `src/server.rs` must call the shared mutation timestamp updater after writing state so idle prompts are delayed by user/agent activity.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
@@ -338,4 +341,20 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: heartbeat is intentionally not a mutation event; it should update `AppState::last_heartbeat_at()` without publishing SSE or emitting stdout JSON.
   - Gotchas encountered: browser/dev-browser verification tools were not available, so the manual 70s network-panel heartbeat smoke test still needs a human browser pass.
   - Useful context: verification included strict Cargo checks, inline JavaScript syntax checking with Node, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
+---
+## 2026-04-23 17:03:30 AEST - US-037
+- Implemented the server-side idle timer that emits `prompt.suggest_done` stdout events after quiet windows, tracks heartbeat and mutation activity, and disables idle detection when `idle_timeout_secs = 0`.
+- Files changed: `src/server.rs`, `src/lib.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: idle detection uses `AppState` activity timestamps and emits only to the stdout event stream; it does not broadcast over SSE.
+  - Gotchas encountered: all successful state mutation handlers need to update the mutation timestamp after writing state or idle prompts may fire while the session is active.
+  - Useful context: validation passed with strict Cargo checks, `./install.sh`, and `discuss --version` from PATH; no browser testing was needed because this story only changed server idle behavior.
+---
+## 2026-04-23 17:08:43 AEST - US-038
+- Implemented the pure transcript builder with serializable transcript structs, document-order sorting, soft-deleted thread inclusion, attached replies/takes/resolutions, and deterministic unit coverage.
+- Files changed: `src/transcript.rs`, `src/state/store.rs`, `src/lib.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: Done/history code should call `build_transcript(&State)` rather than serializing `State::snapshot()`, because snapshots intentionally hide soft-deleted threads.
+  - Gotchas encountered: transcript output includes the thread's `text` and `kind` in addition to the PRD-listed fields to preserve the initial thread comment and avoid data loss.
+  - Useful context: validation passed with strict Cargo checks, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`; no browser testing was needed because this story only changed pure Rust logic.
 ---
