@@ -4,6 +4,7 @@
 - Root Rust project is a single binary Cargo crate named `discuss`; keep `/target/` ignored and commit `Cargo.lock`.
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
+- Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -22,4 +23,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: shared fallible APIs now live behind `discuss::DiscussError` and `discuss::Result`, with `src/lib.rs` re-exporting library-facing types.
   - Gotchas encountered: display messages are part of the acceptance contract; tests should assert the path/port/source and suggested next step, not just variant construction.
   - Useful context: `RenderError` stores a boxed error source so later render implementations can preserve underlying failures without tying the enum to a specific renderer crate.
+---
+## 2026-04-23 12:19:55 AEST - US-003
+- Implemented the clap CLI scaffold with `discuss <FILE>`, placeholder `discuss update`, package-version reporting, FR-23 help text, and stderr-only application error handling.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/cli.rs`, `src/exit.rs`, `src/lib.rs`, `src/main.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: clap parsing lives in `src/cli.rs`; `main.rs` should only parse args, call `discuss::run`, print errors to stderr, and return mapped exit codes.
+  - Gotchas encountered: clap reports a bare command with `arg_required_else_help` as `DisplayHelpOnMissingArgumentOrSubcommand`, not plain `DisplayHelp`.
+  - Useful context: `discuss update` is intentionally a no-op placeholder until the later update stories add network/download behavior.
 ---
