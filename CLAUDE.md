@@ -29,6 +29,7 @@
 - Browser REST mutation failures in `discuss.html` should restore user input, rollback optimistic state, and call `showMutationError(...)` with a Retry closure instead of using `alert()` or dropping text.
 - There is no v1 delete-reply endpoint, so the browser should not offer local-only follow-up deletion unless a matching REST API is added.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and break the stream when `AppState::subscribe_shutdown()` fires.
+- Browser heartbeat lives in `src/server.rs` at `POST /api/heartbeat` and updates `AppState::last_heartbeat_at()` silently; do not emit SSE broadcasts or stdout events for heartbeat pings.
 - HTTP mutation handlers live in `src/server.rs`; on a successful state write they should publish a `BroadcastEvent` and emit the matching stdout `Event`, with tests injecting `EventEmitter::boxed(...)` through `AppState::new` to capture stdout.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.

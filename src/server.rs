@@ -2,8 +2,8 @@ use std::future::Future;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::Path;
@@ -41,6 +41,7 @@ pub struct AppState {
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     markdown_source: Arc<str>,
     shutdown: ShutdownSignal,
+    last_heartbeat_at: Arc<Mutex<Instant>>,
     next_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
     next_take_number: Arc<AtomicU64>,
@@ -58,6 +59,7 @@ impl AppState {
             emitter,
             markdown_source: Arc::from(""),
             shutdown: ShutdownSignal::new(),
+            last_heartbeat_at: Arc::new(Mutex::new(Instant::now())),
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
             next_take_number: Arc::new(AtomicU64::new(1)),
@@ -80,6 +82,24 @@ impl AppState {
 
     pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
         self.shutdown.subscribe()
+    }
+
+    pub fn last_heartbeat_at(&self) -> std::result::Result<Instant, String> {
+        self.last_heartbeat_at
+            .lock()
+            .map(|last_heartbeat_at| *last_heartbeat_at)
+            .map_err(|_| "heartbeat lock poisoned".to_string())
+    }
+
+    fn record_heartbeat(&self) -> std::result::Result<Instant, String> {
+        self.last_heartbeat_at
+            .lock()
+            .map(|mut last_heartbeat_at| {
+                let now = Instant::now();
+                *last_heartbeat_at = now;
+                now
+            })
+            .map_err(|_| "heartbeat lock poisoned".to_string())
     }
 
     fn next_user_thread_id(&self) -> ThreadId {
@@ -170,6 +190,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/", get(get_root))
         .route("/api/state", get(get_api_state))
         .route("/api/events", get(get_api_events))
+        .route("/api/heartbeat", post(post_api_heartbeat))
         .route(
             "/api/drafts/new-thread",
             post(post_api_drafts_new_thread).delete(delete_api_drafts_new_thread),
@@ -1110,6 +1131,15 @@ async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {
             "state lock poisoned while reading state",
         )
             .into_response(),
+    }
+}
+
+async fn post_api_heartbeat(AxumState(app_state): AxumState<AppState>) -> Response {
+    match app_state.record_heartbeat() {
+        Ok(_) => Json(OkResponse { ok: true }).into_response(),
+        Err(message) => {
+            api_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+        }
     }
 }
 

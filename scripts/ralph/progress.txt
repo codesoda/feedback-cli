@@ -31,6 +31,7 @@
 - Browser REST mutation failures in `discuss.html` should restore user input, rollback optimistic state, and call `showMutationError(...)` with a Retry closure instead of using `alert()` or dropping text.
 - There is no v1 delete-reply endpoint, so the browser should not offer local-only follow-up deletion unless a matching REST API is added.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
+- Browser heartbeat lives in `src/server.rs` at `POST /api/heartbeat` and updates `AppState::last_heartbeat_at()` silently; do not emit SSE broadcasts or stdout events for heartbeat pings.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
@@ -329,4 +330,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: startup lifecycle stdout events belong in `src/lib.rs`'s `serve_with_ready` callback, while request mutation events stay in `src/server.rs`.
   - Gotchas encountered: CLI integration tests for long-lived `discuss <file>` should wait for the stderr listening line, then kill the child and inspect captured stdout for flushed JSON events.
   - Useful context: verification included strict Cargo checks, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
+---
+## 2026-04-23 16:52:42 AEST - US-036
+- Implemented silent browser heartbeat support with `POST /api/heartbeat`, `AppState` heartbeat timestamp tracking, and a 30s `discuss.html` ping loop that is cleared on unload.
+- Files changed: `discuss.html`, `src/server.rs`, `src/template.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: heartbeat is intentionally not a mutation event; it should update `AppState::last_heartbeat_at()` without publishing SSE or emitting stdout JSON.
+  - Gotchas encountered: browser/dev-browser verification tools were not available, so the manual 70s network-panel heartbeat smoke test still needs a human browser pass.
+  - Useful context: verification included strict Cargo checks, inline JavaScript syntax checking with Node, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
 ---

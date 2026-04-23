@@ -191,6 +191,59 @@ async fn get_api_state_returns_seeded_threads() {
 }
 
 #[tokio::test]
+async fn post_api_heartbeat_updates_timestamp_silently() {
+    let addr = free_loopback_addr();
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        bus,
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    );
+    let before = app_state
+        .last_heartbeat_at()
+        .expect("heartbeat timestamp should be readable");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state.clone(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    sleep(Duration::from_millis(2)).await;
+    let response = post_json_path(addr, "/api/heartbeat", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    assert_eq!(response_json(&response), json!({ "ok": true }));
+    let first = app_state
+        .last_heartbeat_at()
+        .expect("heartbeat timestamp should be readable after POST");
+    assert!(first > before);
+
+    sleep(Duration::from_millis(2)).await;
+    let response = post_json_path(addr, "/api/heartbeat", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    let second = app_state
+        .last_heartbeat_at()
+        .expect("heartbeat timestamp should be readable after second POST");
+    assert!(second > first);
+
+    assert!(stdout_string(&stdout).is_empty());
+    assert_no_sse_event(&mut sse).await;
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn get_api_events_streams_published_broadcast_event() {
     let addr = free_loopback_addr();
     let app_state = AppState::for_process();

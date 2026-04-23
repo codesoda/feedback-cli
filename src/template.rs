@@ -284,6 +284,25 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_sends_browser_heartbeat() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains("const HEARTBEAT_INTERVAL_MS = 30000"));
+        assert!(page.contains("fetch('/api/heartbeat'"));
+        assert!(page.contains("setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS)"));
+        assert!(page.contains("clearInterval(heartbeatTimer)"));
+
+        let event_stream = page
+            .find("startEventStream();")
+            .expect("template should start SSE");
+        let heartbeat = page
+            .find("startHeartbeat();")
+            .expect("template should start heartbeat");
+
+        assert!(event_stream < heartbeat);
+    }
+
+    #[test]
     fn bundled_template_interleaves_takes_and_replies_chronologically() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
 

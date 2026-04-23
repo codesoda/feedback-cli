@@ -1060,6 +1060,32 @@
     }
   }
 
+  // ---------- Heartbeat ----------
+  const HEARTBEAT_INTERVAL_MS = 30000;
+  let heartbeatTimer = null;
+
+  function sendHeartbeat() {
+    fetch('/api/heartbeat', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      keepalive: true,
+    }).catch(error => {
+      console.warn('Failed to send heartbeat:', error);
+    });
+  }
+
+  function startHeartbeat() {
+    if (heartbeatTimer) return;
+    sendHeartbeat();
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function stopHeartbeat() {
+    if (!heartbeatTimer) return;
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+
   function normalizeThreadPayload(payload) {
     const thread = normalizeUserThreads([payload])[0];
     if (!thread) return null;
@@ -2745,8 +2771,10 @@
     renderAllThreads();
     scheduleReposition();
     startEventStream();
+    startHeartbeat();
   });
   window.addEventListener('beforeunload', () => {
+    stopHeartbeat();
     if (eventReconnectTimer) clearTimeout(eventReconnectTimer);
     if (eventSource) eventSource.close();
   });
