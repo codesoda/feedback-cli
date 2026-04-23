@@ -4,6 +4,8 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 
+use chrono::Utc;
+
 pub mod assets;
 pub mod cli;
 pub mod config;
@@ -60,33 +62,60 @@ where
                 return Ok(());
             };
             let markdown_source = read_markdown_file(&file)?;
+            let source_file = source_file_for_event(&file);
             let port = config.port.unwrap_or(DEFAULT_PORT);
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
             let auto_open = config.auto_open;
+            let app_state = AppState::for_process().with_markdown_source(markdown_source);
+            let emitter = app_state.emitter.clone();
 
-            server::serve_with_ready(
-                addr,
-                AppState::for_process().with_markdown_source(markdown_source),
-                shutdown,
-                move |listening_addr| {
-                    let url = launch::loopback_url(listening_addr);
-                    let launcher = launch::SystemBrowserLauncher;
-                    let mut stderr = io::stderr();
+            server::serve_with_ready(addr, app_state, shutdown, move |listening_addr| {
+                let url = launch::loopback_url(listening_addr);
+                let started_at = Utc::now();
 
-                    if let Err(error) =
-                        launch::announce_listening(&mut stderr, &launcher, &url, auto_open)
-                    {
-                        tracing::warn!(
-                            %url,
-                            error = %error,
-                            "failed to write listening URL to stderr"
-                        );
-                    }
-                },
-            )
+                if let Err(error) = emitter.emit(&Event {
+                    kind: EventKind::SessionStarted,
+                    at: started_at,
+                    payload: serde_json::json!({
+                        "url": url.clone(),
+                        "source_file": source_file,
+                        "started_at": started_at.to_rfc3339(),
+                    }),
+                }) {
+                    tracing::warn!(
+                        %url,
+                        error = %error,
+                        "failed to emit session.started event"
+                    );
+                }
+
+                let launcher = launch::SystemBrowserLauncher;
+                let mut stderr = io::stderr();
+
+                if let Err(error) =
+                    launch::announce_listening(&mut stderr, &launcher, &url, auto_open)
+                {
+                    tracing::warn!(
+                        %url,
+                        error = %error,
+                        "failed to write listening URL to stderr"
+                    );
+                }
+            })
             .await
         }
     }
+}
+
+fn source_file_for_event(path: &Path) -> String {
+    if let Ok(path) = path.canonicalize() {
+        return path.to_string_lossy().into_owned();
+    }
+
+    path.file_name()
+        .and_then(|file_name| file_name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 fn read_markdown_file(path: &Path) -> Result<String> {
