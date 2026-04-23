@@ -34,8 +34,10 @@
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
 - Browser heartbeat lives in `src/server.rs` at `POST /api/heartbeat` and updates `AppState::last_heartbeat_at()` silently; do not emit SSE broadcasts or stdout events for heartbeat pings.
 - Idle detection is configured on `AppState` with `with_idle_timeout_secs(...)`; `0` disables the server-start idle task, and `prompt.suggest_done` is stdout-only rather than an SSE broadcast.
+- `serve_with_ready` exits on either its external shutdown future or the internal `AppState` shutdown signal; routes hit after shutdown is signaled should return structured 503 when the listener has not already closed.
 - Successful state-mutation handlers in `src/server.rs` must call the shared mutation timestamp updater after writing state so idle prompts are delayed by user/agent activity.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
+- `POST /api/done` in `src/server.rs` builds transcripts with `build_transcript(&State)`, emits the `session.done` stdout event, then signals internal graceful shutdown; future Done/history work should preserve that ordering around any archive write.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
 - Browser draft writes in `discuss.html` should go through `setNewThreadDraft`/`setFollowupDraft`; those helpers optimistically update local state and queue REST writes per draft key so later clears cannot be overwritten by older in-flight saves.
@@ -357,4 +359,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: Done/history code should call `build_transcript(&State)` rather than serializing `State::snapshot()`, because snapshots intentionally hide soft-deleted threads.
   - Gotchas encountered: transcript output includes the thread's `text` and `kind` in addition to the PRD-listed fields to preserve the initial thread comment and avoid data loss.
   - Useful context: validation passed with strict Cargo checks, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`; no browser testing was needed because this story only changed pure Rust logic.
+---
+## 2026-04-23 17:13:22 AEST - US-039
+- Implemented `POST /api/done` to emit a `session.done` transcript event, return `{ ok: true, message: "transcript emitted" }`, and initiate graceful server shutdown.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: `serve_with_ready` now listens to both the external shutdown future and the internal `AppState` shutdown signal, so request handlers can cleanly end the server.
+  - Gotchas encountered: requests that race with shutdown may see either a structured 503 or a closed/refused connection; tests should accept both when verifying post-Done behavior.
+  - Useful context: validation passed with strict Cargo checks, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`; history archive writing is intentionally left for the later history stories.
 ---

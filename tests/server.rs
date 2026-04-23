@@ -9,7 +9,7 @@ use discuss::assets;
 use discuss::state::{Draft, Resolution, State, Thread, ThreadId, ThreadKind};
 use discuss::{
     serve, serve_with_ready, AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter,
-    EventKind,
+    EventKind, Transcript,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1804,6 +1804,63 @@ async fn post_api_threads_returns_structured_400_for_missing_fields() {
 }
 
 #[tokio::test]
+async fn post_api_done_emits_transcript_and_triggers_shutdown() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread("u-done", 3));
+    }
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        state,
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, pending()));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/done", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    assert_eq!(
+        response_json(&response),
+        json!({ "ok": true, "message": "transcript emitted" })
+    );
+
+    let followup_response = try_post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"late","text":"too late"}"#,
+    )
+    .await;
+    if let Ok(response) = followup_response {
+        assert!(
+            response.starts_with("HTTP/1.1 503") || response.is_empty(),
+            "expected 503 or closed connection during shutdown, got {response:?}"
+        );
+    }
+
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    let stdout = stdout_string(&stdout);
+    assert_eq!(stdout.lines().count(), 1);
+    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::SessionDone.to_string());
+    let transcript: Transcript =
+        serde_json::from_value(emitted["payload"].clone()).expect("payload is transcript");
+    assert_eq!(transcript.threads.len(), 1);
+    assert_eq!(transcript.threads[0].id, ThreadId("u-done".to_string()));
+    assert_eq!(transcript.threads[0].anchor_start, 3);
+}
+
+#[tokio::test]
 async fn busy_port_maps_to_port_in_use() {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind busy listener");
     let addr = listener.local_addr().expect("busy listener addr");
@@ -1969,22 +2026,23 @@ async fn get_path(addr: SocketAddr, path: &str) -> String {
 }
 
 async fn post_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
-    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    try_post_json_path(addr, path, body)
+        .await
+        .expect("POST request should succeed")
+}
+
+async fn try_post_json_path(addr: SocketAddr, path: &str, body: &str) -> io::Result<String> {
+    let mut stream = TcpStream::connect(addr).await?;
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .expect("write request");
+    stream.write_all(request.as_bytes()).await?;
 
     let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .await
-        .expect("read response");
-    response
+    stream.read_to_string(&mut response).await?;
+
+    Ok(response)
 }
 
 async fn delete_path(addr: SocketAddr, path: &str) -> String {

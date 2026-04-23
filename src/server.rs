@@ -5,11 +5,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::Path;
 use axum::extract::State as AxumState;
 use axum::http::header;
+use axum::http::Request;
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -29,6 +32,7 @@ use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
     Draft, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
 };
+use crate::transcript::build_transcript;
 use crate::{render, template, Config, DiscussError, Result};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -242,6 +246,10 @@ impl ShutdownSignal {
     fn signal(&self) {
         self.tx.send_replace(true);
     }
+
+    fn is_signaled(&self) -> bool {
+        *self.tx.borrow()
+    }
 }
 
 pub async fn serve<F>(addr: SocketAddr, app_state: AppState, shutdown: F) -> Result<()>
@@ -273,10 +281,14 @@ where
 
     let router = build_router(app_state.clone());
     let shutdown_signal = app_state.shutdown.clone();
+    let mut internal_shutdown = shutdown_signal.subscribe();
 
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            shutdown.await;
+            tokio::select! {
+                _ = shutdown => {}
+                _ = internal_shutdown.changed() => {}
+            }
             shutdown_signal.signal();
         })
         .await
@@ -368,8 +380,13 @@ fn build_router(app_state: AppState) -> Router {
             "/api/threads/{id}/unresolve",
             post(post_api_thread_unresolve),
         )
+        .route("/api/done", post(post_api_done))
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            reject_during_shutdown,
+        ))
         .fallback(not_found)
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)
@@ -471,6 +488,12 @@ struct FollowupDraftCleared {
 #[derive(Debug, Serialize)]
 struct OkResponse {
     ok: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DoneResponse {
+    ok: bool,
+    message: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -1248,6 +1271,51 @@ fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest
     Json(OkResponse { ok: true }).into_response()
 }
 
+async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
+    let transcript = match app_state.state.read() {
+        Ok(state) => build_transcript(&state),
+        Err(_) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while building transcript",
+            );
+        }
+    };
+    let payload = match serde_json::to_value(transcript) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize transcript: {error}"),
+            );
+        }
+    };
+    let emitted_at = Utc::now();
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::SessionDone,
+        at: emitted_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit session.done event: {error}"),
+        );
+    }
+
+    app_state.record_mutation();
+    app_state.shutdown.signal();
+
+    Json(DoneResponse {
+        ok: true,
+        message: "transcript emitted",
+    })
+    .into_response()
+}
+
 fn api_error_response(
     status: StatusCode,
     code: &'static str,
@@ -1263,6 +1331,22 @@ fn api_error_response(
         }),
     )
         .into_response()
+}
+
+async fn reject_during_shutdown(
+    AxumState(app_state): AxumState<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if app_state.shutdown.is_signaled() {
+        return api_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "discuss session is shutting down",
+        );
+    }
+
+    next.run(request).await
 }
 
 async fn get_root(AxumState(app_state): AxumState<AppState>) -> Response {
