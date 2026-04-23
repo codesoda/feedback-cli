@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
-use discuss::state::{State, Thread, ThreadId, ThreadKind};
+use discuss::state::{Resolution, State, Thread, ThreadId, ThreadKind};
 use discuss::{serve, AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -654,6 +654,245 @@ async fn post_api_thread_takes_returns_structured_400_for_empty_text() {
         .as_str()
         .expect("message string")
         .contains("text"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let thread_id = ThreadId("u-resolve".to_string());
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread("u-resolve", 2));
+    }
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = post_json_path(
+        addr,
+        "/api/threads/u-resolve/resolve",
+        r#"{"decision":"accepted"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["decision"], "accepted");
+    assert!(body["resolvedAt"].as_str().is_some());
+
+    let snapshot = state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot();
+    assert_eq!(
+        snapshot.resolutions[&thread_id].decision,
+        Some("accepted".to_string())
+    );
+
+    let sse_event = read_until(&mut sse, "\n\n").await;
+    assert!(sse_event.contains("event: thread.resolved"));
+    assert!(sse_event.contains("\"threadId\":\"u-resolve\""));
+    assert!(sse_event.contains("\"decision\":\"accepted\""));
+
+    let stdout_after_first = stdout_string(&stdout);
+    assert_eq!(stdout_after_first.lines().count(), 1);
+    let emitted: Value =
+        serde_json::from_str(stdout_after_first.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::ThreadResolved.to_string());
+    assert_eq!(emitted["payload"]["threadId"], "u-resolve");
+    assert_eq!(emitted["payload"]["resolution"]["decision"], "accepted");
+    assert_eq!(
+        emitted["payload"]["resolution"]["resolvedAt"],
+        body["resolvedAt"]
+    );
+
+    let response = post_json_path(
+        addr,
+        "/api/threads/u-resolve/resolve",
+        r#"{"decision":"revised"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["decision"], "revised");
+
+    let snapshot = state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot();
+    assert_eq!(
+        snapshot.resolutions[&thread_id].decision,
+        Some("revised".to_string())
+    );
+
+    let sse_event = read_until(&mut sse, "\n\n").await;
+    assert!(sse_event.contains("event: thread.resolved"));
+    assert!(sse_event.contains("\"threadId\":\"u-resolve\""));
+    assert!(sse_event.contains("\"decision\":\"revised\""));
+
+    let stdout_after_second = stdout_string(&stdout);
+    assert_eq!(stdout_after_second.lines().count(), 2);
+    let emitted: Value = serde_json::from_str(
+        stdout_after_second
+            .lines()
+            .nth(1)
+            .expect("second stdout event"),
+    )
+    .expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::ThreadResolved.to_string());
+    assert_eq!(emitted["payload"]["threadId"], "u-resolve");
+    assert_eq!(emitted["payload"]["resolution"]["decision"], "revised");
+    assert_eq!(
+        emitted["payload"]["resolution"]["resolvedAt"],
+        body["resolvedAt"]
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_thread_unresolve_clears_resolution_idempotently_and_emits_events() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let thread_id = ThreadId("u-unresolve".to_string());
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread("u-unresolve", 2));
+        state_guard.set_resolution(
+            thread_id.clone(),
+            Resolution {
+                decision: Some("accepted".to_string()),
+                resolved_at: timestamp(1),
+            },
+        );
+    }
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = post_json_path(addr, "/api/threads/u-unresolve/unresolve", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    assert_eq!(response_json(&response), json!({ "ok": true }));
+    assert!(state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot()
+        .resolutions
+        .is_empty());
+
+    let sse_event = read_until(&mut sse, "\n\n").await;
+    assert!(sse_event.contains("event: thread.unresolved"));
+    assert!(sse_event.contains("\"threadId\":\"u-unresolve\""));
+
+    let stdout_after_first = stdout_string(&stdout);
+    assert_eq!(stdout_after_first.lines().count(), 1);
+    let emitted: Value =
+        serde_json::from_str(stdout_after_first.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::ThreadUnresolved.to_string());
+    assert_eq!(emitted["payload"]["threadId"], "u-unresolve");
+
+    let response = post_json_path(addr, "/api/threads/u-unresolve/unresolve", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    assert_eq!(response_json(&response), json!({ "ok": true }));
+    assert!(state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot()
+        .resolutions
+        .is_empty());
+
+    let sse_event = read_until(&mut sse, "\n\n").await;
+    assert!(sse_event.contains("event: thread.unresolved"));
+    assert!(sse_event.contains("\"threadId\":\"u-unresolve\""));
+
+    let stdout_after_second = stdout_string(&stdout);
+    assert_eq!(stdout_after_second.lines().count(), 2);
+    let emitted: Value = serde_json::from_str(
+        stdout_after_second
+            .lines()
+            .nth(1)
+            .expect("second stdout event"),
+    )
+    .expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::ThreadUnresolved.to_string());
+    assert_eq!(emitted["payload"]["threadId"], "u-unresolve");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_thread_resolution_routes_return_structured_404_for_unknown_thread() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response =
+        post_json_path(addr, "/api/threads/missing/resolve", r#"{"decision":null}"#).await;
+    assert!(response.starts_with("HTTP/1.1 404"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "not_found");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("message string")
+        .contains("missing"));
+
+    let response = post_json_path(addr, "/api/threads/missing/unresolve", "").await;
+    assert!(response.starts_with("HTTP/1.1 404"));
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "not_found");
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("message string")
+        .contains("missing"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)

@@ -22,4 +22,5 @@
 - HTTP mutation handlers live in `src/server.rs`; on a successful state write they should publish a `BroadcastEvent` and emit the matching stdout `Event`, with tests injecting `EventEmitter::boxed(...)` through `AppState::new` to capture stdout.
 - Axum dynamic routes in `src/server.rs` must use 0.8 `{id}` syntax (for example `/api/threads/{id}/replies`), not legacy `:id`.
 - Child thread mutation handlers should validate against `State::get_threads()` before mutating; unknown or soft-deleted thread IDs return structured 404 JSON.
+- Resolution mutation event payloads must include `threadId`; `thread.resolved` also nests the stored `resolution` object so clients can update state without rehydrating.
 - Root `install.sh` is currently a source-checkout installer only: it requires `Cargo.toml` next to the script, runs `RUSTFLAGS="-D warnings" cargo build --release`, copies `target/release/discuss` to `${DISCUSS_INSTALL_DIR:-/usr/local/bin}/discuss`, and verifies the installed binary with `--version`.

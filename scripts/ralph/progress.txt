@@ -24,6 +24,7 @@
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - Axum 0.8 dynamic path segments use `{id}` route syntax (for example `/api/threads/{id}/replies`), not legacy `:id`.
 - Child thread mutation routes should verify the target thread is present in `State::get_threads()` before writing child state; unknown or inactive IDs return structured 404 JSON.
+- Resolution mutation events must include `threadId`; `thread.resolved` payloads also include the stored `resolution` object for browser state updates.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -202,4 +203,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: take mutation handlers mirror reply handlers but use independent `t-<n>` process-local IDs from `AppState`.
   - Gotchas encountered: existing child-route validation via `State::get_threads()` already excludes unknown and soft-deleted threads, so take handlers should use the same active-thread check as replies.
   - Useful context: installer verification was run with a temporary `DISCUSS_INSTALL_DIR` and that directory prepended to `PATH` to avoid writing to `/usr/local/bin` while still checking `discuss --version` from PATH.
+---
+## 2026-04-23 14:05:31 AEST - US-022
+- Implemented idempotent `POST /api/threads/{id}/resolve` and `POST /api/threads/{id}/unresolve` handlers for active threads.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: resolution event payloads should carry `threadId`, and resolved events should nest the stored `resolution` so the frontend can update the resolutions map directly.
+  - Gotchas encountered: unresolve has no request body, but the raw HTTP test helper can still send a zero-length JSON request to exercise the route.
+  - Useful context: the installer smoke test with `DISCUSS_INSTALL_DIR="$(mktemp -d)" ./install.sh` verifies the installed binary by running its absolute path, so the temp directory does not need to be on `PATH`.
 ---

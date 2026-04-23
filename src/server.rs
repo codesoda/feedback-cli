@@ -25,7 +25,7 @@ use tower_http::trace::TraceLayer;
 use crate::assets;
 use crate::events::{Event, EventEmitter, EventKind};
 use crate::sse::{BroadcastEvent, EventBus};
-use crate::state::{Reply, SharedState, State, Take, Thread, ThreadId, ThreadKind};
+use crate::state::{Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind};
 use crate::{render, template, DiscussError, Result};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -155,6 +155,11 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
         .route("/api/threads/{id}/takes", post(post_api_thread_takes))
+        .route("/api/threads/{id}/resolve", post(post_api_thread_resolve))
+        .route(
+            "/api/threads/{id}/unresolve",
+            post(post_api_thread_unresolve),
+        )
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .fallback(not_found)
@@ -186,6 +191,16 @@ struct AddReplyRequest {
 #[derive(Debug, Deserialize)]
 struct AddTakeRequest {
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveThreadRequest {
+    decision: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OkResponse {
+    ok: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -441,6 +456,131 @@ async fn post_api_thread_takes(
     }
 
     Json(take).into_response()
+}
+
+async fn post_api_thread_resolve(
+    AxumState(app_state): AxumState<AppState>,
+    Path(thread_id): Path<String>,
+    payload: std::result::Result<Json<ResolveThreadRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+
+    let thread_id = ThreadId(thread_id);
+    let resolution = {
+        let Ok(mut state) = app_state.state.write() else {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while resolving thread",
+            );
+        };
+
+        if !state
+            .get_threads()
+            .iter()
+            .any(|thread| thread.id == thread_id)
+        {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("thread not found: {}", thread_id.0),
+            );
+        }
+
+        state.set_resolution(
+            thread_id.clone(),
+            Resolution {
+                decision: request.decision,
+                resolved_at: Utc::now(),
+            },
+        )
+    };
+
+    let payload = serde_json::json!({
+        "threadId": thread_id,
+        "resolution": resolution,
+    });
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::ThreadResolved.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::ThreadResolved,
+        at: resolution.resolved_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit thread.resolved event: {error}"),
+        );
+    }
+
+    Json(resolution).into_response()
+}
+
+async fn post_api_thread_unresolve(
+    AxumState(app_state): AxumState<AppState>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    let thread_id = ThreadId(thread_id);
+    let emitted_at = Utc::now();
+
+    {
+        let Ok(mut state) = app_state.state.write() else {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while unresolving thread",
+            );
+        };
+
+        if !state
+            .get_threads()
+            .iter()
+            .any(|thread| thread.id == thread_id)
+        {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("thread not found: {}", thread_id.0),
+            );
+        }
+
+        state.clear_resolution(&thread_id);
+    }
+
+    let payload = serde_json::json!({ "threadId": thread_id });
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::ThreadUnresolved.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::ThreadUnresolved,
+        at: emitted_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit thread.unresolved event: {error}"),
+        );
+    }
+
+    Json(OkResponse { ok: true }).into_response()
 }
 
 fn api_error_response(
