@@ -221,4 +221,18 @@ mod tests {
         assert!(!page.contains("delete-comment"));
         assert!(!page.contains("s.followups[tid].splice"));
     }
+
+    #[test]
+    fn bundled_template_surfaces_rest_mutation_failures_inline() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains(".mutation-error"));
+        assert!(page.contains("function showMutationError"));
+        assert!(page.contains("button.textContent = 'Retry'"));
+        assert!(page.contains("showMutationError(followup, \"couldn't save"));
+        assert!(page.contains("showMutationError(followup, \"couldn't resolve"));
+        assert!(page.contains("showMutationError(restored, \"couldn't delete"));
+        assert!(page.contains("showMutationError(newThreadEditor, \"couldn't save"));
+        assert!(!page.contains("alert("));
+    }
 }

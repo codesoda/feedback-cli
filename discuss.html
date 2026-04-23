@@ -512,6 +512,30 @@
   }
   .followup button.resolve:hover { background: #d8e8d8; }
   .followup .hint { font-size: 11px; color: var(--muted); margin-left: auto; }
+  .mutation-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: #fff2f0;
+    border-left: 3px solid #c62828;
+    border-radius: 0 4px 4px 0;
+    color: #8a1f14;
+    font-size: 12px;
+  }
+  .mutation-error span { flex: 1; }
+  .mutation-error button {
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid #e0aaa4;
+    border-radius: 4px;
+    background: white;
+    color: #8a1f14;
+    cursor: pointer;
+  }
+  .mutation-error button:hover { background: #ffe3df; }
 
   /* --- Resolution banner --- */
   .thread.resolved { opacity: 0.85; }
@@ -913,6 +937,30 @@
   function threadApiPath(threadId, suffix = '') {
     return `/api/threads/${encodeURIComponent(threadId)}${suffix}`;
   }
+  function clearMutationError(container) {
+    if (!container) return;
+    const existing = container.querySelector('.mutation-error');
+    if (existing) existing.remove();
+  }
+  function showMutationError(container, message, retry) {
+    if (!container) return;
+    clearMutationError(container);
+    const box = document.createElement('div');
+    box.className = 'mutation-error';
+    const text = document.createElement('span');
+    text.textContent = message;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Retry';
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      clearMutationError(container);
+      retry();
+    });
+    box.append(text, button);
+    container.appendChild(box);
+    scheduleReposition();
+  }
 
   // Drafts persist in-progress text so a user who starts typing but clicks
   // off doesn't lose their work. A teal dashed marker appears on the anchor
@@ -1164,6 +1212,7 @@
 
   function wireFollowup(threadEl, threadId) {
     const ta = threadEl.querySelector('.followup textarea');
+    const followup = threadEl.querySelector('.followup');
     const saveBtn = threadEl.querySelector('.followup .save');
     const clearBtn = threadEl.querySelector('.followup .clear');
     const resolveBtn = threadEl.querySelector('.followup .resolve');
@@ -1176,6 +1225,7 @@
     async function save() {
       const text = ta.value.trim();
       if (!text) return;
+      clearMutationError(followup);
       const previousState = cloneState(loadState());
       const s = cloneState(previousState);
       const addedAt = new Date().toISOString();
@@ -1207,10 +1257,12 @@
         renderFollowups(threadEl, threadId);
         renderMarkers();
         reposition();
+        showMutationError(followup, "couldn't save — retry?", save);
       }
     }
     async function resolve() {
       const decision = ta.value.trim(); // optional; blank = resolved without reason
+      clearMutationError(followup);
       const previousState = cloneState(loadState());
       const s = cloneState(previousState);
       s.resolutions[threadId] = {
@@ -1243,6 +1295,7 @@
         renderMarkers();
         renderMetaStatus();
         reposition();
+        showMutationError(followup, "couldn't resolve — retry?", resolve);
       }
     }
     saveBtn.addEventListener('click', save);
@@ -1282,8 +1335,8 @@
       banner.classList.add('shown');
       followup.style.display = 'none';
       threadEl.classList.add('resolved');
-      banner.querySelector('.unresolve').addEventListener('click', async (e) => {
-        e.stopPropagation();
+      async function unresolve() {
+        clearMutationError(banner);
         const previousState = cloneState(loadState());
         const st = cloneState(previousState);
         delete st.resolutions[threadId];
@@ -1301,7 +1354,16 @@
           renderMarkers();
           renderMetaStatus();
           reposition();
+          showMutationError(
+            threadEl.querySelector('.resolution-banner'),
+            "couldn't reopen — retry?",
+            unresolve
+          );
         }
+      }
+      banner.querySelector('.unresolve').addEventListener('click', (e) => {
+        e.stopPropagation();
+        unresolve();
       });
     } else {
       banner.innerHTML = '';
@@ -1320,6 +1382,7 @@
     updateEmptyState();
   }
   async function deleteUserThread(threadEl, threadId) {
+    clearMutationError(threadEl);
     const previousState = cloneState(loadState());
     const nextState = cloneState(previousState);
     nextState.userThreads = nextState.userThreads.filter(t => t.id !== threadId);
@@ -1342,6 +1405,10 @@
       renderAllThreads();
       const restored = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
       if (restored) openThread(restored, { scroll: false });
+      showMutationError(restored, "couldn't delete — retry?", () => {
+        const current = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+        if (current) deleteUserThread(current, threadId);
+      });
       scheduleReposition();
     }
   }
@@ -1704,6 +1771,7 @@
     async function save() {
       const text = ta.value.trim();
       if (!text) { closeNewThreadEditor(); return; }
+      clearMutationError(editor);
       const previousState = cloneState(loadState());
       const s = cloneState(previousState);
       const id = 'pending-' + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -1774,7 +1842,13 @@
         renderAllThreads();
         openNewThreadEditor(startIdx, endIdx);
         const restoredTextarea = newThreadEditor?.querySelector('textarea');
-        if (restoredTextarea) restoredTextarea.value = text;
+        if (restoredTextarea) {
+          restoredTextarea.value = text;
+          setNewThreadDraft(startIdx, endIdx, text);
+        }
+        showMutationError(newThreadEditor, "couldn't save — retry?", () => {
+          newThreadEditor?.querySelector('.save')?.click();
+        });
         scheduleReposition();
       }
     }
