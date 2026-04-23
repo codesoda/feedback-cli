@@ -844,7 +844,7 @@
         "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
       ],
       "priority": 41,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

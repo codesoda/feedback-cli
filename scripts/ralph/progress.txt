@@ -38,6 +38,7 @@
 - Successful state-mutation handlers in `src/server.rs` must call the shared mutation timestamp updater after writing state so idle prompts are delayed by user/agent activity.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - `POST /api/done` in `src/server.rs` builds transcripts with `build_transcript(&State)`, emits the `session.done` stdout event, then signals internal graceful shutdown; future Done/history work should preserve that ordering around any archive write.
+- History archiving lives in `src/history.rs`; Done writes the transcript payload JSON to `<history_dir>/<sanitized-source-stem>/<ISO8601>.json` after stdout emission, and archive failures must warn to tracing/stderr without changing the `/api/done` response or shutdown.
 - Browser Done completion keeps the legacy `#copy-all` id for styling, calls `/api/done`, then uses `markReviewComplete()` to close SSE/heartbeat, disable controls, show `#done-banner`, and suppress further mutations/events.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
@@ -376,4 +377,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: browser completion should go through `markReviewComplete()` after `/api/done` so Done is a terminal UI state, not just a server call.
   - Gotchas encountered: queued draft writes can outlive the button click, so draft queues and `apiJson` must no-op after `reviewComplete` for non-Done mutations.
   - Useful context: no dev-browser/browser testing tool is available in this session; verification used inline JavaScript parsing, template regression tests, strict Cargo checks, `./install.sh`, and `discuss --version` from PATH.
+---
+## 2026-04-23 17:30:34 AEST - US-041
+- Implemented history archive writes on Done, including default history directory resolution, source-stem sanitization, payload JSON archive files, and non-fatal archive failure warnings.
+- Files changed: `src/history.rs`, `src/lib.rs`, `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: history path construction and archive writes live in `src/history.rs`; use `AppState::with_source_path(...)` and `AppState::with_history_dir(...)` to provide Done archive context in runtime/tests.
+  - Gotchas encountered: Done must clone the transcript payload for stdout emission so the exact same JSON value can be written to history afterward; archive failure tests intentionally produce one stderr warning.
+  - Useful context: verification passed with strict Cargo checks and installer smoke test; no browser testing was needed because this story only changes server-side Done/archive behavior.
 ---

@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::assets;
 use crate::events::{Event, EventEmitter, EventKind};
+use crate::history;
 use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
     Draft, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
@@ -47,6 +49,8 @@ pub struct AppState {
     pub bus: Arc<EventBus>,
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     markdown_source: Arc<str>,
+    source_path: Arc<Option<PathBuf>>,
+    history_dir: Arc<PathBuf>,
     shutdown: ShutdownSignal,
     activity: ActivityTracker,
     idle_timeout_secs: Arc<AtomicU64>,
@@ -66,6 +70,8 @@ impl AppState {
             bus,
             emitter,
             markdown_source: Arc::from(""),
+            source_path: Arc::new(None),
+            history_dir: Arc::new(history::default_history_dir()),
             shutdown: ShutdownSignal::new(),
             activity: ActivityTracker::new(),
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
@@ -86,6 +92,16 @@ impl AppState {
     pub fn with_markdown_source(mut self, markdown_source: impl Into<String>) -> Self {
         let markdown_source = markdown_source.into();
         self.markdown_source = Arc::from(markdown_source.into_boxed_str());
+        self
+    }
+
+    pub fn with_source_path(mut self, source_path: impl Into<PathBuf>) -> Self {
+        self.source_path = Arc::new(Some(source_path.into()));
+        self
+    }
+
+    pub fn with_history_dir(mut self, history_dir: impl Into<PathBuf>) -> Self {
+        self.history_dir = Arc::new(history_dir.into());
         self
     }
 
@@ -1297,13 +1313,22 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
     if let Err(error) = app_state.emitter.emit(&Event {
         kind: EventKind::SessionDone,
         at: emitted_at,
-        payload,
+        payload: payload.clone(),
     }) {
         return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             format!("failed to emit session.done event: {error}"),
         );
+    }
+
+    let history_path = history::history_archive_path(
+        app_state.history_dir.as_ref().as_path(),
+        app_state.source_path.as_ref().as_deref(),
+        emitted_at,
+    );
+    if let Err(error) = history::write_history_archive(&history_path, &payload) {
+        warn_history_archive_failure(&history_path, &error);
     }
 
     app_state.record_mutation();
@@ -1314,6 +1339,19 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
         message: "transcript emitted",
     })
     .into_response()
+}
+
+fn warn_history_archive_failure(path: &FsPath, error: &io::Error) {
+    tracing::warn!(
+        path = %path.display(),
+        error = %error,
+        "failed to write history archive"
+    );
+    let _ = writeln!(
+        io::stderr(),
+        "warning: failed to write history archive to {}: {error}",
+        path.display()
+    );
 }
 
 fn api_error_response(

@@ -12,6 +12,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod exit;
+pub mod history;
 pub mod launch;
 pub mod logging;
 pub mod render;
@@ -68,9 +69,13 @@ where
             let port = config.port.unwrap_or(DEFAULT_PORT);
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
             let auto_open = config.auto_open;
-            let app_state = AppState::for_process()
+            let mut app_state = AppState::for_process()
                 .with_markdown_source(markdown_source)
+                .with_source_path(file.clone())
                 .with_idle_timeout_secs(config.idle_timeout_secs);
+            if let Some(history_dir) = config.history_dir.clone() {
+                app_state = app_state.with_history_dir(history_dir);
+            }
             let emitter = app_state.emitter.clone();
 
             server::serve_with_ready(addr, app_state, shutdown, move |listening_addr| {

@@ -1,6 +1,8 @@
+use std::fs;
 use std::future::pending;
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1806,6 +1808,7 @@ async fn post_api_threads_returns_structured_400_for_missing_fields() {
 #[tokio::test]
 async fn post_api_done_emits_transcript_and_triggers_shutdown() {
     let addr = free_loopback_addr();
+    let history_dir = tempfile::tempdir().expect("history tempdir");
     let state = State::new_shared();
     {
         let mut state_guard = state.write().expect("state lock should not be poisoned");
@@ -1817,6 +1820,8 @@ async fn post_api_done_emits_transcript_and_triggers_shutdown() {
         Arc::new(EventBus::new(16)),
         Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
     )
+    .with_source_path("docs/review:plan.md")
+    .with_history_dir(history_dir.path())
     .with_idle_timeout_secs(0);
     let server = tokio::spawn(serve(addr, app_state, pending()));
 
@@ -1858,6 +1863,59 @@ async fn post_api_done_emits_transcript_and_triggers_shutdown() {
     assert_eq!(transcript.threads.len(), 1);
     assert_eq!(transcript.threads[0].id, ThreadId("u-done".to_string()));
     assert_eq!(transcript.threads[0].anchor_start, 3);
+
+    let archive_path = single_json_file(&history_dir.path().join("review_plan"));
+    let archived: Value = serde_json::from_str(
+        &fs::read_to_string(archive_path).expect("history archive should be readable"),
+    )
+    .expect("history archive JSON");
+    assert_eq!(archived, emitted["payload"]);
+}
+
+#[tokio::test]
+async fn post_api_done_history_write_failure_still_succeeds_and_shutdown_exits() {
+    let addr = free_loopback_addr();
+    let tempdir = tempfile::tempdir().expect("history tempdir");
+    let blocked_history_root = tempdir.path().join("not-a-directory");
+    fs::write(&blocked_history_root, "blocks create_dir_all")
+        .expect("blocking file should be created");
+    let state = State::new_shared();
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread("u-done", 3));
+    }
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        state,
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_source_path("review.md")
+    .with_history_dir(&blocked_history_root)
+    .with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, pending()));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/done", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    assert_eq!(
+        response_json(&response),
+        json!({ "ok": true, "message": "transcript emitted" })
+    );
+
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    let stdout = stdout_string(&stdout);
+    assert_eq!(stdout.lines().count(), 1);
+    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
+    assert_eq!(emitted["kind"], EventKind::SessionDone.to_string());
+    assert!(blocked_history_root.is_file());
 }
 
 #[tokio::test]
@@ -1988,6 +2046,18 @@ async fn unknown_asset_path_returns_404() {
         .expect("server exits within timeout")
         .expect("server task should not panic")
         .expect("server shutdown should succeed");
+}
+
+fn single_json_file(dir: &Path) -> PathBuf {
+    let mut entries = fs::read_dir(dir)
+        .expect("history source directory should exist")
+        .map(|entry| entry.expect("history entry should be readable").path())
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    assert_eq!(entries.len(), 1, "expected exactly one archive in {dir:?}");
+    entries.remove(0)
 }
 
 fn free_loopback_addr() -> SocketAddr {
