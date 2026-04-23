@@ -46,3 +46,4 @@
 - Resolution mutation event payloads must include `threadId`; `thread.resolved` also nests the stored `resolution` object so clients can update state without rehydrating.
 - Thread deletion is a soft delete for `kind = "user"` threads only; `kind = "prepopulated"` returns structured 403 code `prepopulated_thread`, and `thread.deleted` event payloads use `{ "threadId": ... }`.
 - Root `install.sh` is dual-mode and POSIX `sh` compatible: source checkout mode requires `install.sh` plus `Cargo.toml` next to each other and builds with warnings denied, while curl/download mode resolves the latest GitHub Release asset for the detected target triple before installing to `~/.discuss/bin/discuss` and symlinking `~/.local/bin/discuss`.
+- GitHub Actions CI lives in `.github/workflows/ci.yml`; keep workflow-level `RUSTFLAGS="-D warnings"` and `CARGO_INCREMENTAL="0"`, and preserve the Rust step order `fmt -> clippy --all-targets -> build --all-targets -> test`.

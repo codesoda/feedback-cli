@@ -4,6 +4,7 @@
 - Root Rust project is a single binary Cargo crate named `discuss`; keep `/target/` ignored and commit `Cargo.lock`.
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
 - Root `install.sh` is dual-mode and POSIX `sh` compatible: source checkout mode builds with warnings denied from a colocated `Cargo.toml`, while curl/download mode resolves the latest GitHub Release asset for the detected target triple before installing to `~/.discuss/bin/discuss` and symlinking `~/.local/bin/discuss`.
+- GitHub Actions CI lives in `.github/workflows/ci.yml`; keep workflow-level `RUSTFLAGS="-D warnings"` and `CARGO_INCREMENTAL="0"`, and preserve the Rust step order `cargo fmt --check` -> `cargo clippy --all-targets -- -D warnings` -> `cargo build --all-targets` -> `cargo test`.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
@@ -401,4 +402,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: keep `install.sh` POSIX `sh` compatible because the release-install path is intended to work with `curl | sh`, not just `./install.sh`.
   - Gotchas encountered: curl/download mode needs clear non-zero failures for both “latest release tag could not be resolved” and “asset download returned non-2xx”, otherwise GitHub redirect/download problems become opaque.
   - Useful context: verification covered `bash-agent`, `shellcheck`, the exact strict Cargo gates, a real `PATH="$HOME/.local/bin:$PATH" ./install.sh` smoke test, `which discuss`, `discuss --version`, and a temporary fake-release smoke test for the download branch without touching the real install.
+---
+## 2026-04-23 17:49:17 AEST - US-044
+- Implemented the GitHub Actions CI workflow at `.github/workflows/ci.yml` with `push` to `main`, `pull_request`, stale-run cancellation, workflow-level warnings-denied env, and the required Rust validation/build/test step order.
+- Files changed: `.github/workflows/ci.yml`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep CI’s Rust job contract centralized in `.github/workflows/ci.yml` with workflow-level `RUSTFLAGS="-D warnings"` and `CARGO_INCREMENTAL="0"` so build/test jobs inherit the warnings-as-errors policy consistently.
+  - Gotchas encountered: `act` is not installed in this environment, so local verification for workflow behavior is limited to the exact Rust commands and installer smoke test; remote workflow execution still needs GitHub.
+  - Useful context: validation passed with `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, `RUSTFLAGS="-D warnings" cargo build --all-targets`, `RUSTFLAGS="-D warnings" cargo test`, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
 ---
