@@ -5,6 +5,7 @@
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
 - Root `install.sh` is dual-mode and POSIX `sh` compatible: source checkout mode builds with warnings denied from a colocated `Cargo.toml`, while curl/download mode resolves the latest GitHub Release asset for the detected target triple before installing to `~/.discuss/bin/discuss` and symlinking `~/.local/bin/discuss`.
 - GitHub Actions CI lives in `.github/workflows/ci.yml`; keep workflow-level `RUSTFLAGS="-D warnings"` and `CARGO_INCREMENTAL="0"`, and preserve the Rust step order `cargo fmt --check` -> `cargo clippy --all-targets -- -D warnings` -> `cargo build --all-targets` -> `cargo test`.
+- `CHANGELOG.md` should follow Keep a Changelog headings; the current `awk '/^## \\[Unreleased\\]/,/^## \\[/' CHANGELOG.md` smoke check only proves the `## [Unreleased]` heading exists because the end pattern matches the same line.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
@@ -410,4 +411,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: keep CI’s Rust job contract centralized in `.github/workflows/ci.yml` with workflow-level `RUSTFLAGS="-D warnings"` and `CARGO_INCREMENTAL="0"` so build/test jobs inherit the warnings-as-errors policy consistently.
   - Gotchas encountered: `act` is not installed in this environment, so local verification for workflow behavior is limited to the exact Rust commands and installer smoke test; remote workflow execution still needs GitHub.
   - Useful context: validation passed with `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, `RUSTFLAGS="-D warnings" cargo build --all-targets`, `RUSTFLAGS="-D warnings" cargo test`, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
+---
+## 2026-04-23 17:58:20 AEST - US-045
+- Added a root `CHANGELOG.md` scaffold using Keep a Changelog headings, with a documented `Unreleased` section and standard `Added` / `Changed` / `Fixed` subsections.
+- Files changed: `CHANGELOG.md`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep `CHANGELOG.md` in Keep a Changelog form with `## [Unreleased]` and `### Added` / `Changed` / `Fixed` subsections so later release automation has predictable anchors.
+  - Gotchas encountered: the current `awk '/^## \\[Unreleased\\]/,/^## \\[/'` smoke check only verifies that the `## [Unreleased]` heading exists because the end pattern matches that same line; it does not prove the section body was captured.
+  - Useful context: verification passed with `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, `RUSTFLAGS="-D warnings" cargo build --all-targets`, `RUSTFLAGS="-D warnings" cargo test`, and an isolated-temp-home `./install.sh` run that preserved the real rustup toolchain via `RUSTUP_HOME`/`CARGO_HOME` while confirming `discuss --version` from PATH.
 ---
