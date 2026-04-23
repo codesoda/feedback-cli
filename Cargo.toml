@@ -11,6 +11,7 @@ strip = true
 lto = true
 
 [dependencies]
+async-stream = "0.3"
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5.50", features = ["derive"] }

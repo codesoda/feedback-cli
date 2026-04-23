@@ -2,15 +2,18 @@ use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::State as AxumState;
 use axum::http::header;
 use axum::http::StatusCode;
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Json;
 use axum::Router;
 use tokio::net::TcpListener;
+use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 
@@ -22,6 +25,7 @@ use crate::{render, template, DiscussError, Result};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
 const ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -114,6 +118,7 @@ fn build_router(app_state: AppState) -> Router {
     Router::new()
         .route("/", get(get_root))
         .route("/api/state", get(get_api_state))
+        .route("/api/events", get(get_api_events))
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .fallback(not_found)
@@ -158,6 +163,44 @@ async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {
         )
             .into_response(),
     }
+}
+
+async fn get_api_events(AxumState(app_state): AxumState<AppState>) -> impl IntoResponse {
+    let mut events = app_state.bus.subscribe();
+    let mut shutdown = app_state.subscribe_shutdown();
+    let stream = async_stream::stream! {
+        loop {
+            tokio::select! {
+                biased;
+
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+                event = events.recv() => {
+                    match event {
+                        Ok(event) => {
+                            let Ok(payload) = serde_json::to_string(&event.payload) else {
+                                continue;
+                            };
+                            yield Ok::<_, std::convert::Infallible>(
+                                SseEvent::default().event(event.kind).data(payload),
+                            );
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(SSE_HEARTBEAT_INTERVAL)
+            .text("keep-alive"),
+    )
 }
 
 async fn get_mermaid_js() -> impl IntoResponse {

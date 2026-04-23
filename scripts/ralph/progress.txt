@@ -19,6 +19,7 @@
 - Axum server bootstrap lives in `src/server.rs`; use `AppState::for_process()` for production shared state and `serve(addr, app_state, shutdown)` for the 127.0.0.1-only graceful server wrapper.
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
+- Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -157,4 +158,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: browser-facing state JSON should come directly from `State::snapshot()` so reload hydration and API hydration stay in lockstep.
   - Gotchas encountered: raw HTTP integration tests can parse response bodies as `serde_json::Value` to assert exact snapshot shape without depending on field order.
   - Useful context: `GET /api/state` is read-only; mutation handlers should remain responsible for stdout events and SSE broadcasts in later stories.
+---
+## 2026-04-23 13:37:39 AEST - US-018
+- Implemented `GET /api/events` as an Axum SSE stream backed by `EventBus`, with event names from `BroadcastEvent.kind`, compact JSON payloads in `data:`, 15-second keep-alive comments, and shutdown-aware stream termination.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: SSE HTTP streaming belongs in `src/server.rs`, while `src/sse.rs` remains the process-local broadcast abstraction used by mutation handlers.
+  - Gotchas encountered: raw HTTP SSE tests see chunked transfer framing, so assertions should look for SSE field lines instead of treating the whole TCP read as a bare event.
+  - Useful context: `AppState::subscribe_shutdown()` is the hook that lets long-lived SSE responses end before Axum graceful shutdown waits indefinitely.
 ---

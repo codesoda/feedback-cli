@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
 use discuss::state::{Thread, ThreadId, ThreadKind};
-use discuss::{serve, AppState, DiscussError};
+use discuss::{serve, AppState, BroadcastEvent, DiscussError};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -186,6 +186,110 @@ async fn get_api_state_returns_seeded_threads() {
 }
 
 #[tokio::test]
+async fn get_api_events_streams_published_broadcast_event() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process();
+    let bus = app_state.bus.clone();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut stream = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut stream, "\r\n\r\n").await;
+    assert!(headers.starts_with("HTTP/1.1 200"));
+    assert_sse_headers(&headers);
+
+    bus.publish(BroadcastEvent {
+        kind: "thread.created".to_string(),
+        payload: json!({ "threadId": "u-1" }),
+    });
+
+    let event = read_until(&mut stream, "\n\n").await;
+    assert!(event.contains("event: thread.created"));
+    assert!(event.contains("data: {\"threadId\":\"u-1\"}"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn api_events_disconnect_does_not_break_new_connections() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process();
+    let bus = app_state.bus.clone();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut first = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut first, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+    drop(first);
+
+    let mut second = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut second, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    bus.publish(BroadcastEvent {
+        kind: "take.added".to_string(),
+        payload: json!({ "threadId": "u-2" }),
+    });
+
+    let event = read_until(&mut second, "\n\n").await;
+    assert!(event.contains("event: take.added"));
+    assert!(event.contains("data: {\"threadId\":\"u-2\"}"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn api_events_stream_ends_cleanly_on_shutdown() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut stream = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut stream, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    let mut response_tail = String::new();
+    timeout(
+        Duration::from_secs(1),
+        stream.read_to_string(&mut response_tail),
+    )
+    .await
+    .expect("sse stream closes within timeout")
+    .expect("read sse response tail");
+
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn busy_port_maps_to_port_in_use() {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind busy listener");
     let addr = listener.local_addr().expect("busy listener addr");
@@ -308,12 +412,7 @@ async fn get_root(addr: SocketAddr) -> String {
 }
 
 async fn get_path(addr: SocketAddr, path: &str) -> String {
-    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
-    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .expect("write request");
+    let mut stream = open_get_path(addr, path).await;
 
     let mut response = String::new();
     stream
@@ -321,6 +420,17 @@ async fn get_path(addr: SocketAddr, path: &str) -> String {
         .await
         .expect("read response");
     response
+}
+
+async fn open_get_path(addr: SocketAddr, path: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+
+    stream
 }
 
 fn assert_js_headers(response: &str) {
@@ -332,6 +442,38 @@ fn assert_js_headers(response: &str) {
 fn assert_json_headers(response: &str) {
     let headers = response.to_ascii_lowercase();
     assert!(headers.contains("content-type: application/json"));
+}
+
+fn assert_sse_headers(response: &str) {
+    let headers = response.to_ascii_lowercase();
+    assert!(headers.contains("content-type: text/event-stream"));
+    assert!(headers.contains("cache-control: no-cache"));
+}
+
+async fn read_until(stream: &mut TcpStream, needle: &str) -> String {
+    let mut response = Vec::new();
+    let needle = needle.as_bytes();
+
+    loop {
+        let mut chunk = [0; 1024];
+        let read = timeout(Duration::from_secs(1), stream.read(&mut chunk))
+            .await
+            .expect("read before timeout")
+            .expect("read response");
+        if read == 0 {
+            break;
+        }
+
+        response.extend_from_slice(&chunk[..read]);
+        if response
+            .windows(needle.len())
+            .any(|window| window == needle)
+        {
+            break;
+        }
+    }
+
+    String::from_utf8(response).expect("response should be utf-8")
 }
 
 fn timestamp(second: u32) -> DateTime<Utc> {
