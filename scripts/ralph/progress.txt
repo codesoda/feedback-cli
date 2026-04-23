@@ -30,6 +30,7 @@
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
+- Browser draft writes in `discuss.html` should go through `setNewThreadDraft`/`setFollowupDraft`; those helpers optimistically update local state and queue REST writes per draft key so later clears cannot be overwritten by older in-flight saves.
 - Axum 0.8 dynamic path segments use `{id}` route syntax (for example `/api/threads/{id}/replies`), not legacy `:id`.
 - Child thread mutation routes should verify the target thread is present in `State::get_threads()` before writing child state; unknown or inactive IDs return structured 404 JSON.
 - Resolution mutation events must include `threadId`; `thread.resolved` payloads also include the stored `resolution` object for browser state updates.
@@ -284,4 +285,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: discussion-card message ordering should flow through `commentsForThread(...)`, which merges display followups and raw takes before sorting by `addedAt`/`createdAt`.
   - Gotchas encountered: `src/template.rs` must avoid matching the instructional comment's literal `<section id="doc-content">` when injecting rendered markdown, or styles before the real section are stripped from served pages.
   - Useful context: no dev-browser/browser testing tool is available in this session; verification was main inline script parsing, strict Cargo checks, and the final installer smoke test.
+---
+## 2026-04-23 15:12:20 AEST - US-028
+- Replaced draft persistence in `discuss.html` with `/api/drafts/new-thread` and `/api/drafts/followup` REST writes, including clear-on-save/resolve/cancel paths and inline retry errors.
+- Files changed: `discuss.html`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: draft writes should be queued per draft key in the browser so an older in-flight save cannot land after a newer clear and resurrect a stale draft.
+  - Gotchas encountered: saving a thread/reply/resolve must clear the matching server draft after the primary mutation succeeds; otherwise reload hydration can bring back text that the UI already cleared.
+  - Useful context: no dev-browser/browser testing tool is available in this session; verification was main inline script parsing, template regression tests, strict Cargo checks, and the final installer smoke test.
 ---

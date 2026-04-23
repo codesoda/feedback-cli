@@ -233,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_sends_draft_mutations_to_rest_api() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains("function persistNewThreadDraft"));
+        assert!(page.contains("function queueDraftRequest"));
+        assert!(page.contains("apiJson('/api/drafts/new-thread'"));
+        assert!(page.contains("method: 'DELETE', body: { anchorStart, anchorEnd }"));
+        assert!(page.contains("function persistFollowupDraft"));
+        assert!(page.contains("apiJson('/api/drafts/followup'"));
+        assert!(page.contains("method: 'DELETE', body: { threadId }"));
+        assert!(!page.contains("saveState(s);"));
+    }
+
+    #[test]
     fn bundled_template_surfaces_rest_mutation_failures_inline() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
 
@@ -243,6 +257,9 @@ mod tests {
         assert!(page.contains("showMutationError(followup, \"couldn't resolve"));
         assert!(page.contains("showMutationError(restored, \"couldn't delete"));
         assert!(page.contains("showMutationError(newThreadEditor, \"couldn't save"));
+        assert!(page.contains("function showDraftMutationError"));
+        assert!(page.contains("\"couldn't save draft"));
+        assert!(page.contains("\"couldn't clear draft"));
         assert!(!page.contains("alert("));
     }
 

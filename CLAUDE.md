@@ -28,6 +28,7 @@
 - HTTP mutation handlers live in `src/server.rs`; on a successful state write they should publish a `BroadcastEvent` and emit the matching stdout `Event`, with tests injecting `EventEmitter::boxed(...)` through `AppState::new` to capture stdout.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
+- Browser draft writes in `discuss.html` should go through `setNewThreadDraft`/`setFollowupDraft`; those helpers optimistically update local state and queue REST writes per draft key so a later clear cannot be overwritten by an older in-flight save.
 - Axum dynamic routes in `src/server.rs` must use 0.8 `{id}` syntax (for example `/api/threads/{id}/replies`), not legacy `:id`.
 - Child thread mutation handlers should validate against `State::get_threads()` before mutating; unknown or soft-deleted thread IDs return structured 404 JSON.
 - Resolution mutation event payloads must include `threadId`; `thread.resolved` also nests the stored `resolution` object so clients can update state without rehydrating.

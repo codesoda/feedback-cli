@@ -966,6 +966,17 @@
   function threadApiPath(threadId, suffix = '') {
     return `/api/threads/${encodeURIComponent(threadId)}${suffix}`;
   }
+  function latestNewThreadDraftText(startIdx, endIdx, fallback = '') {
+    const draft = getNewThreadDraft(loadState(), startIdx, endIdx);
+    const ta = newThreadEditor?.querySelector('textarea');
+    return ta ? ta.value : (draft ? draft.text : fallback);
+  }
+  function latestFollowupDraftText(threadId, fallback = '') {
+    const threadEl = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+    const ta = threadEl?.querySelector('.followup textarea');
+    const draft = getFollowupDraft(loadState(), threadId);
+    return ta ? ta.value : (draft ? draft.text : fallback);
+  }
 
   // ---------- Server-sent events ----------
   const SSE_EVENT_KINDS = [
@@ -1390,37 +1401,89 @@
     container.appendChild(box);
     scheduleReposition();
   }
+  function showDraftMutationError(container, message, action) {
+    showMutationError(container, message, () => {
+      Promise.resolve().then(action).catch(error => {
+        console.error('Failed to retry draft mutation:', error);
+        showDraftMutationError(container, message, action);
+      });
+    });
+  }
 
   // Drafts persist in-progress text so a user who starts typing but clicks
   // off doesn't lose their work. A teal dashed marker appears on the anchor
   // until the draft is saved, resolved, or explicitly cleared.
   function newThreadDraftKey(startIdx, endIdx) { return `${startIdx}-${endIdx}`; }
-  function setNewThreadDraft(startIdx, endIdx, text) {
-    const s = loadState();
+  function ensureDraftState(state) {
+    if (!state.drafts) state.drafts = { newThread: {}, followup: {} };
+    if (!state.drafts.newThread) state.drafts.newThread = {};
+    if (!state.drafts.followup) state.drafts.followup = {};
+  }
+  function upsertLocalNewThreadDraft(state, startIdx, endIdx, text) {
+    ensureDraftState(state);
     const key = newThreadDraftKey(startIdx, endIdx);
     if (text && text.trim()) {
-      s.drafts.newThread[key] = {
+      state.drafts.newThread[key] = {
         text,
-        anchorStart: parseInt(startIdx),
-        anchorEnd: parseInt(endIdx),
+        anchorStart: parseInt(startIdx, 10),
+        anchorEnd: parseInt(endIdx, 10),
         savedAt: new Date().toISOString(),
       };
     } else {
-      delete s.drafts.newThread[key];
+      delete state.drafts.newThread[key];
     }
-    saveState(s);
+  }
+  function upsertLocalFollowupDraft(state, threadId, text) {
+    ensureDraftState(state);
+    if (text && text.trim()) {
+      state.drafts.followup[threadId] = { text, savedAt: new Date().toISOString() };
+    } else {
+      delete state.drafts.followup[threadId];
+    }
+  }
+  const draftRequestQueues = new Map();
+  function queueDraftRequest(key, action) {
+    const previous = draftRequestQueues.get(key) || Promise.resolve();
+    const run = previous.catch(() => {}).then(action);
+    draftRequestQueues.set(key, run);
+    run.finally(() => {
+      if (draftRequestQueues.get(key) === run) draftRequestQueues.delete(key);
+    }).catch(() => {});
+    return run;
+  }
+  function persistNewThreadDraft(startIdx, endIdx, text) {
+    const anchorStart = parseInt(startIdx, 10);
+    const anchorEnd = parseInt(endIdx, 10);
+    if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return Promise.resolve();
+    return queueDraftRequest(`newThread:${anchorStart}-${anchorEnd}`, () => {
+      if (text && text.trim()) {
+        return apiJson('/api/drafts/new-thread', { body: { anchorStart, anchorEnd, text } });
+      }
+      return apiJson('/api/drafts/new-thread', { method: 'DELETE', body: { anchorStart, anchorEnd } });
+    });
+  }
+  function persistFollowupDraft(threadId, text) {
+    return queueDraftRequest(`followup:${threadId}`, () => {
+      if (text && text.trim()) {
+        return apiJson('/api/drafts/followup', { body: { threadId, text } });
+      }
+      return apiJson('/api/drafts/followup', { method: 'DELETE', body: { threadId } });
+    });
+  }
+  function setNewThreadDraft(startIdx, endIdx, text) {
+    const s = cloneState(loadState());
+    upsertLocalNewThreadDraft(s, startIdx, endIdx, text);
+    setCurrentState(s);
+    return persistNewThreadDraft(startIdx, endIdx, text);
   }
   function getNewThreadDraft(state, startIdx, endIdx) {
     return state.drafts.newThread[newThreadDraftKey(startIdx, endIdx)];
   }
   function setFollowupDraft(threadId, text) {
-    const s = loadState();
-    if (text && text.trim()) {
-      s.drafts.followup[threadId] = { text, savedAt: new Date().toISOString() };
-    } else {
-      delete s.drafts.followup[threadId];
-    }
-    saveState(s);
+    const s = cloneState(loadState());
+    upsertLocalFollowupDraft(s, threadId, text);
+    setCurrentState(s);
+    return persistFollowupDraft(threadId, text);
   }
   function getFollowupDraft(state, threadId) {
     return state.drafts.followup[threadId];
@@ -1727,6 +1790,16 @@
       reposition();
       try {
         const reply = await apiJson(threadApiPath(threadId, '/replies'), { body: { text } });
+        try {
+          await persistFollowupDraft(threadId, '');
+        } catch (draftError) {
+          console.error('Failed to clear follow-up draft after reply save:', draftError);
+          showDraftMutationError(
+            followup,
+            "couldn't clear draft — retry?",
+            () => persistFollowupDraft(threadId, '')
+          );
+        }
         const syncedState = cloneState(loadState());
         const items = syncedState.followups[threadId] || [];
         const optimistic = items.find(item => item.text === text && item.addedAt === addedAt);
@@ -1744,6 +1817,9 @@
         console.error('Failed to save reply:', error);
         setCurrentState(previousState);
         ta.value = text;
+        setFollowupDraft(threadId, text).catch(draftError => {
+          console.error('Failed to restore follow-up draft after reply save failure:', draftError);
+        });
         renderFollowups(threadEl, threadId);
         renderMarkers();
         reposition();
@@ -1770,6 +1846,16 @@
         const resolution = await apiJson(threadApiPath(threadId, '/resolve'), {
           body: { decision: decision || null },
         });
+        try {
+          await persistFollowupDraft(threadId, '');
+        } catch (draftError) {
+          console.error('Failed to clear follow-up draft after resolve:', draftError);
+          showDraftMutationError(
+            threadEl.querySelector('.resolution-banner') || followup,
+            "couldn't clear draft — retry?",
+            () => persistFollowupDraft(threadId, '')
+          );
+        }
         const syncedState = cloneState(loadState());
         syncedState.resolutions[threadId] = resolution;
         setCurrentState(syncedState);
@@ -1781,6 +1867,11 @@
         console.error('Failed to resolve thread:', error);
         setCurrentState(previousState);
         ta.value = decision;
+        if (decision) {
+          setFollowupDraft(threadId, decision).catch(draftError => {
+            console.error('Failed to restore follow-up draft after resolve failure:', draftError);
+          });
+        }
         renderResolution(threadEl, threadId);
         renderMarkers();
         renderMetaStatus();
@@ -1791,11 +1882,29 @@
     saveBtn.addEventListener('click', save);
     clearBtn.addEventListener('click', () => {
       ta.value = '';
-      setFollowupDraft(threadId, '');
+      clearMutationError(followup);
+      setFollowupDraft(threadId, '').catch(error => {
+        console.error('Failed to clear follow-up draft:', error);
+        showDraftMutationError(
+          followup,
+          "couldn't clear draft — retry?",
+          () => setFollowupDraft(threadId, latestFollowupDraftText(threadId))
+        );
+      });
       renderMarkers();
     });
     if (resolveBtn) resolveBtn.addEventListener('click', resolve);
-    ta.addEventListener('input', () => setFollowupDraft(threadId, ta.value));
+    ta.addEventListener('input', () => {
+      clearMutationError(followup);
+      setFollowupDraft(threadId, ta.value).catch(error => {
+        console.error('Failed to save follow-up draft:', error);
+        showDraftMutationError(
+          followup,
+          "couldn't save draft — retry?",
+          () => setFollowupDraft(threadId, latestFollowupDraftText(threadId, ta.value))
+        );
+      });
+    });
     ta.addEventListener('blur', () => renderMarkers());
     ta.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); save(); }
@@ -2270,9 +2379,18 @@
     // stomping their previous text.
     if (ta.value.length) ta.setSelectionRange(ta.value.length, ta.value.length);
 
-    // Persist draft as user types. localStorage writes are cheap enough
-    // that debouncing isn't worth the code.
-    ta.addEventListener('input', () => setNewThreadDraft(startIdx, endIdx, ta.value));
+    // Persist draft as user types so reloads can hydrate it from the server.
+    ta.addEventListener('input', () => {
+      clearMutationError(editor);
+      setNewThreadDraft(startIdx, endIdx, ta.value).catch(error => {
+        console.error('Failed to save new-thread draft:', error);
+        showDraftMutationError(
+          editor,
+          "couldn't save draft — retry?",
+          () => setNewThreadDraft(startIdx, endIdx, latestNewThreadDraftText(startIdx, endIdx, ta.value))
+        );
+      });
+    });
 
     async function save() {
       const text = ta.value.trim();
@@ -2319,6 +2437,13 @@
             text,
           },
         });
+        let draftClearError = null;
+        try {
+          await persistNewThreadDraft(startIdx, endIdx, '');
+        } catch (draftError) {
+          console.error('Failed to clear new-thread draft after thread save:', draftError);
+          draftClearError = draftError;
+        }
         const serverId = String(created.id);
         const serverCreatedAt = created.createdAt || createdAt;
         const syncedState = cloneState(loadState());
@@ -2340,7 +2465,16 @@
         setCurrentState(syncedState);
         renderAllThreads();
         const newEl = document.querySelector(`.thread[data-thread-id="${serverId}"]`);
-        if (newEl) openThread(newEl, { scroll: false });
+        if (newEl) {
+          openThread(newEl, { scroll: false });
+          if (draftClearError) {
+            showDraftMutationError(
+              newEl,
+              "couldn't clear draft — retry?",
+              () => persistNewThreadDraft(startIdx, endIdx, '')
+            );
+          }
+        }
         scheduleReposition();
       } catch (error) {
         console.error('Failed to create thread:', error);
@@ -2350,7 +2484,9 @@
         const restoredTextarea = newThreadEditor?.querySelector('textarea');
         if (restoredTextarea) {
           restoredTextarea.value = text;
-          setNewThreadDraft(startIdx, endIdx, text);
+          setNewThreadDraft(startIdx, endIdx, text).catch(draftError => {
+            console.error('Failed to restore new-thread draft after create failure:', draftError);
+          });
         }
         showMutationError(newThreadEditor, "couldn't save — retry?", () => {
           newThreadEditor?.querySelector('.save')?.click();
@@ -2361,10 +2497,21 @@
     editor.querySelector('.save').addEventListener('click', save);
     editor.querySelector('.cancel').addEventListener('click', () => {
       // Cancel drops the draft entirely — the teal marker won't appear.
-      const s = loadState();
+      clearMutationError(editor);
+      const s = cloneState(loadState());
       clearNewThreadDraft(s, startIdx, endIdx);
-      saveState(s);
-      closeNewThreadEditor();
+      setCurrentState(s);
+      renderMarkers();
+      persistNewThreadDraft(startIdx, endIdx, '').then(() => {
+        closeNewThreadEditor();
+      }).catch(error => {
+        console.error('Failed to clear new-thread draft:', error);
+        showDraftMutationError(
+          editor,
+          "couldn't clear draft — retry?",
+          () => persistNewThreadDraft(startIdx, endIdx, '')
+        );
+      });
     });
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); closeNewThreadEditor(); }
