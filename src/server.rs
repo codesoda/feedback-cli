@@ -158,6 +158,10 @@ fn build_router(app_state: AppState) -> Router {
             "/api/drafts/new-thread",
             post(post_api_drafts_new_thread).delete(delete_api_drafts_new_thread),
         )
+        .route(
+            "/api/drafts/followup",
+            post(post_api_drafts_followup).delete(delete_api_drafts_followup),
+        )
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
@@ -220,6 +224,19 @@ struct ClearNewThreadDraftRequest {
     anchor_end: usize,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertFollowupDraftRequest {
+    thread_id: ThreadId,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClearFollowupDraftRequest {
+    thread_id: ThreadId,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NewThreadDraftResponse {
@@ -236,6 +253,22 @@ struct NewThreadDraftCleared {
     scope: &'static str,
     anchor_start: usize,
     anchor_end: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FollowupDraftResponse {
+    scope: &'static str,
+    thread_id: ThreadId,
+    text: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FollowupDraftCleared {
+    scope: &'static str,
+    thread_id: ThreadId,
 }
 
 #[derive(Debug, Serialize)]
@@ -814,6 +847,176 @@ fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequ
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
                 format!("failed to serialize cleared new-thread draft: {error}"),
+            );
+        }
+    };
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::DraftCleared.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::DraftCleared,
+        at: emitted_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit draft.cleared event: {error}"),
+        );
+    }
+
+    Json(OkResponse { ok: true }).into_response()
+}
+
+async fn post_api_drafts_followup(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<UpsertFollowupDraftRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+
+    if request.text.trim().is_empty() {
+        return clear_followup_draft(
+            &app_state,
+            ClearFollowupDraftRequest {
+                thread_id: request.thread_id,
+            },
+        );
+    }
+
+    let updated_at = Utc::now();
+    let draft = Draft {
+        text: request.text,
+        updated_at,
+    };
+    let response = {
+        let Ok(mut state) = app_state.state.write() else {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while saving follow-up draft",
+            );
+        };
+
+        if !state
+            .get_threads()
+            .iter()
+            .any(|thread| thread.id == request.thread_id)
+        {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("thread not found: {}", request.thread_id.0),
+            );
+        }
+
+        state.upsert_followup_draft(request.thread_id.clone(), draft.clone());
+
+        FollowupDraftResponse {
+            scope: "followup",
+            thread_id: request.thread_id,
+            text: draft.text,
+            updated_at,
+        }
+    };
+    let payload = match serde_json::to_value(&response) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize follow-up draft: {error}"),
+            );
+        }
+    };
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::DraftUpdated.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::DraftUpdated,
+        at: updated_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit draft.updated event: {error}"),
+        );
+    }
+
+    Json(response).into_response()
+}
+
+async fn delete_api_drafts_followup(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<ClearFollowupDraftRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+
+    clear_followup_draft(&app_state, request)
+}
+
+fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest) -> Response {
+    let emitted_at = Utc::now();
+
+    {
+        let Ok(mut state) = app_state.state.write() else {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while clearing follow-up draft",
+            );
+        };
+
+        if !state
+            .get_threads()
+            .iter()
+            .any(|thread| thread.id == request.thread_id)
+        {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("thread not found: {}", request.thread_id.0),
+            );
+        }
+
+        state.clear_followup_draft(&request.thread_id);
+    }
+
+    let cleared = FollowupDraftCleared {
+        scope: "followup",
+        thread_id: request.thread_id,
+    };
+    let payload = match serde_json::to_value(cleared) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize cleared follow-up draft: {error}"),
             );
         }
     };

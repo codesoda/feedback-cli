@@ -502,27 +502,6 @@
       "notes": ""
     },
     {
-      "id": "US-025",
-      "title": "Drafts: POST + DELETE /api/drafts/followup",
-      "description": "Source: PRD US-006 acceptance criteria 3, 4, 5, 6. As the browser, I want server-side persistence for follow-up drafts keyed by threadId so reload doesn't lose mid-typed replies.",
-      "acceptanceCriteria": [
-        "Add `POST /api/drafts/followup` accepting JSON body `{ threadId: string, text: string }`; upserts the draft for that thread",
-        "Add `DELETE /api/drafts/followup` accepting JSON body `{ threadId: string }`; clears the draft (no-op + 200 if it did not exist)",
-        "Empty or whitespace-only `text` on POST is treated as a clear",
-        "Unknown threadId on POST or DELETE → 404 with structured error body (do not silently create)",
-        "Successful upsert / clear publish + emit `draft.updated` / `draft.cleared` events with `{ scope: \"followup\", threadId, ... }`",
-        "Integration tests cover: upsert against an existing thread, whitespace clears, DELETE clears, 404 on unknown threadId",
-        "`cargo fmt --check` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
-        "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
-        "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
-      ],
-      "priority": 25,
-      "passes": false,
-      "notes": ""
-    },
-    {
       "id": "US-026",
       "title": "Frontend: hydrate from GET /api/state on page load (replace loadState)",
       "description": "Source: PRD US-009 acceptance criterion 1. As the page, I want the initial state to come from the server instead of localStorage so the latest threads/drafts/takes are present on load.",
@@ -539,7 +518,7 @@
         "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
         "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
       ],
-      "priority": 26,
+      "priority": 25,
       "passes": false,
       "notes": ""
     },
@@ -558,47 +537,27 @@
         "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
         "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
       ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-032",
+      "title": "Frontend: non-blocking inline error on mutation failure",
+      "description": "Source: PRD US-009 acceptance criterion 5. As the user, when a mutation fails (server down, network blip), I want a non-blocking inline message offering retry — without losing my input.",
+      "acceptanceCriteria": [
+        "Each REST mutation site catches HTTP failures (non-2xx, network errors) and surfaces a non-blocking inline message near the affected control (e.g. \"couldn't save — retry?\" with a Retry action that re-fires the same request)",
+        "On failure, the in-memory state mutation is reverted (or the optimistic update is held until retry succeeds — implementer's choice, but the user's typed text is never silently dropped)",
+        "Errors do not show as alert() / blocking modals",
+        "Manual smoke test: stop the server with the page open, attempt to add a reply, observe the inline error + retry; restart the server, click retry, the reply succeeds",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
+      ],
       "priority": 27,
-      "passes": false,
-      "notes": ""
-    },
-    {
-      "id": "US-028",
-      "title": "Frontend: replace draft saveState calls with /api/drafts/* REST",
-      "description": "Source: PRD US-009 acceptance criterion 2 (drafts portion). As the page, I want every draft write to flow through /api/drafts/new-thread or /api/drafts/followup so drafts survive reloads via the server.",
-      "acceptanceCriteria": [
-        "Replace every saveState() call site in discuss.html that touches drafts.newThread with `POST /api/drafts/new-thread` or `DELETE /api/drafts/new-thread`",
-        "Replace every saveState() call site that touches drafts.followup with `POST /api/drafts/followup` or `DELETE /api/drafts/followup`",
-        "Empty/whitespace text passed to the POST endpoints is OK (the server treats it as a clear, per spec 24/25)",
-        "Manual smoke test: type a new-thread draft, click away, reload — draft text reappears on the same anchor; type a followup draft on a thread, reload — draft text reappears on that thread",
-        "Verify in browser using dev-browser skill",
-        "`cargo fmt --check` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
-        "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
-        "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
-      ],
-      "priority": 28,
-      "passes": false,
-      "notes": ""
-    },
-    {
-      "id": "US-029",
-      "title": "Frontend: drop STORAGE_KEY + remove all remaining localStorage references",
-      "description": "Source: PRD US-009 acceptance criterion 3. As the page, I no longer touch localStorage; the constant and any residual reads/writes are gone.",
-      "acceptanceCriteria": [
-        "Remove the `STORAGE_KEY` constant from discuss.html",
-        "Remove all remaining `localStorage.getItem`, `localStorage.setItem`, and `localStorage.removeItem` references from discuss.html",
-        "`grep -n localStorage discuss.html` returns zero matches after this spec",
-        "Manual smoke test: clear browser localStorage, reload — page still works fully (state still served by the server)",
-        "Verify in browser using dev-browser skill",
-        "`cargo fmt --check` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
-        "`cargo clippy --all-targets -- -D warnings` passes",
-        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
-        "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
-      ],
-      "priority": 29,
       "passes": false,
       "notes": ""
     },
@@ -618,7 +577,7 @@
         "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
         "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
       ],
-      "priority": 30,
+      "priority": 28,
       "passes": false,
       "notes": ""
     },
@@ -639,19 +598,60 @@
         "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
         "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
       ],
+      "priority": 29,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "Drafts: POST + DELETE /api/drafts/followup",
+      "description": "Source: PRD US-006 acceptance criteria 3, 4, 5, 6. As the browser, I want server-side persistence for follow-up drafts keyed by threadId so reload doesn't lose mid-typed replies.",
+      "acceptanceCriteria": [
+        "Add `POST /api/drafts/followup` accepting JSON body `{ threadId: string, text: string }`; upserts the draft for that thread",
+        "Add `DELETE /api/drafts/followup` accepting JSON body `{ threadId: string }`; clears the draft (no-op + 200 if it did not exist)",
+        "Empty or whitespace-only `text` on POST is treated as a clear",
+        "Unknown threadId on POST or DELETE → 404 with structured error body (do not silently create)",
+        "Successful upsert / clear publish + emit `draft.updated` / `draft.cleared` events with `{ scope: \"followup\", threadId, ... }`",
+        "Integration tests cover: upsert against an existing thread, whitespace clears, DELETE clears, 404 on unknown threadId",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
+      ],
+      "priority": 30,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-028",
+      "title": "Frontend: replace draft saveState calls with /api/drafts/* REST",
+      "description": "Source: PRD US-009 acceptance criterion 2 (drafts portion). As the page, I want every draft write to flow through /api/drafts/new-thread or /api/drafts/followup so drafts survive reloads via the server.",
+      "acceptanceCriteria": [
+        "Replace every saveState() call site in discuss.html that touches drafts.newThread with `POST /api/drafts/new-thread` or `DELETE /api/drafts/new-thread`",
+        "Replace every saveState() call site that touches drafts.followup with `POST /api/drafts/followup` or `DELETE /api/drafts/followup`",
+        "Empty/whitespace text passed to the POST endpoints is OK (the server treats it as a clear, per spec 24/25)",
+        "Manual smoke test: type a new-thread draft, click away, reload — draft text reappears on the same anchor; type a followup draft on a thread, reload — draft text reappears on that thread",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes",
+        "After all tests pass, install it to the final location using `./install.sh` and verify `discuss --version` works from PATH."
+      ],
       "priority": 31,
       "passes": false,
       "notes": ""
     },
     {
-      "id": "US-032",
-      "title": "Frontend: non-blocking inline error on mutation failure",
-      "description": "Source: PRD US-009 acceptance criterion 5. As the user, when a mutation fails (server down, network blip), I want a non-blocking inline message offering retry — without losing my input.",
+      "id": "US-029",
+      "title": "Frontend: drop STORAGE_KEY + remove all remaining localStorage references",
+      "description": "Source: PRD US-009 acceptance criterion 3. As the page, I no longer touch localStorage; the constant and any residual reads/writes are gone.",
       "acceptanceCriteria": [
-        "Each REST mutation site catches HTTP failures (non-2xx, network errors) and surfaces a non-blocking inline message near the affected control (e.g. \"couldn't save — retry?\" with a Retry action that re-fires the same request)",
-        "On failure, the in-memory state mutation is reverted (or the optimistic update is held until retry succeeds — implementer's choice, but the user's typed text is never silently dropped)",
-        "Errors do not show as alert() / blocking modals",
-        "Manual smoke test: stop the server with the page open, attempt to add a reply, observe the inline error + retry; restart the server, click retry, the reply succeeds",
+        "Remove the `STORAGE_KEY` constant from discuss.html",
+        "Remove all remaining `localStorage.getItem`, `localStorage.setItem`, and `localStorage.removeItem` references from discuss.html",
+        "`grep -n localStorage discuss.html` returns zero matches after this spec",
+        "Manual smoke test: clear browser localStorage, reload — page still works fully (state still served by the server)",
         "Verify in browser using dev-browser skill",
         "`cargo fmt --check` passes",
         "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
@@ -875,9 +875,9 @@
         "Author install.sh at repo root with both modes",
         "Detection: if Cargo.toml is present next to the script, use the clone-build path; else use the curl-download path",
         "Clone-build path: run `cargo build --release`, copy `target/release/discuss` to `~/.discuss/bin/discuss`, and symlink `~/.local/bin/discuss` to it",
-        "Curl-download path: detect platform via `uname -s` and `uname -m` mapped to a target triple (at minimum `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`); fetch `discuss-vX.Y.Z-<target>.tar.gz` from the latest GitHub Release; extract; install to $INSTALL_DIR",
+        "Curl-download path: detect platform via `uname -s` and `uname -m` mapped to a target triple (at minimum `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`); fetch `discuss-vX.Y.Z-<target>.tar.gz` from the latest GitHub Release; extract to `~/.discuss/bin/discuss`; symlink `~/.local/bin/discuss` to it",
         "macOS quarantine handled (or documented in the failure message if user action is required)",
-        "PATH check at the end: if $INSTALL_DIR is not on PATH, print a clear instruction (with the right shell-rc snippet)",
+        "PATH check at the end: if `~/.local/bin` is not on PATH, print a clear instruction (with the right shell-rc snippet)",
         "Respect `NO_COLOR`; detect TTY via `[ -t 1 ]` to decide whether to emit color/decorations",
         "Script exits non-zero on any failure with a clear error message (e.g. \"failed to download <url>: <http code>\")",
         "Manual smoke test (clone path) on the developer's local machine: `./install.sh` → `which discuss` returns the install path; `discuss --version` works",

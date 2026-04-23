@@ -215,10 +215,10 @@ The result: a single command in, a live bidirectional review, a clean structured
 
 **Acceptance Criteria:**
 - [ ] `install.sh` detects whether it's running from a cloned repo (presence of `Cargo.toml` next to it) or via `curl | sh` (no Cargo.toml present)
-- [ ] Clone-build path: `cargo build --release`, copy `target/release/discuss` to `$INSTALL_DIR` (default `/usr/local/bin`, override via `DISCUSS_INSTALL_DIR`)
-- [ ] curl-download path: detect platform (`uname -s` / `uname -m` → target triple), fetch `discuss-vX.Y.Z-<target>.tar.gz` from GitHub Releases, extract, install
+- [ ] Clone-build path: `cargo build --release`, copy `target/release/discuss` to `~/.discuss/bin/discuss`, and symlink `~/.local/bin/discuss` to it
+- [ ] curl-download path: detect platform (`uname -s` / `uname -m` → target triple), fetch `discuss-vX.Y.Z-<target>.tar.gz` from GitHub Releases, extract to `~/.discuss/bin/discuss`, and symlink `~/.local/bin/discuss` to it
 - [ ] macOS codesign / quarantine flag handled (or documented if requiring user action)
-- [ ] PATH check at the end — if `$INSTALL_DIR` not on PATH, print a clear instruction
+- [ ] PATH check at the end — if `~/.local/bin` is not on PATH, print a clear instruction
 - [ ] Script respects `NO_COLOR` and detects whether stdout is a TTY (per CLI talk patterns)
 - [ ] Script exits non-zero on failure with a clear error
 
