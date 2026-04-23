@@ -1,0 +1,133 @@
+# discuss
+
+> Launch a live browser review session for a Markdown file.
+> Discuss renders the document locally, serves a loopback web UI, and records threaded comments, replies, takes, resolutions, and a final transcript.
+
+## Install
+
+Pre-built binary:
+  curl -sSf https://raw.githubusercontent.com/chrisraethke/discuss-cli/main/install.sh | sh
+
+From a clone (requires Rust):
+  git clone https://github.com/chrisraethke/discuss-cli.git
+  cd discuss-cli
+  sh install.sh
+
+## Quick Start
+
+Review a Markdown file:
+  discuss path/to/review.md
+
+Pin the port and suppress browser auto-open:
+  discuss --port 9000 --no-open path/to/review.md
+
+When discuss starts it binds `127.0.0.1` and prints:
+  listening on http://127.0.0.1:<port>
+
+Open that URL in a browser. When the review is complete, click Done to finish the session.
+
+## CLI
+
+Main command:
+  discuss [--port N] [--no-open] [--no-save] [--history-dir PATH] FILE
+
+Update check:
+  discuss update --check
+
+Flags:
+  --port N            Bind the local review server to this port. Effective default: 7777.
+  --no-open           Do not open the browser automatically after the server starts.
+  --no-save           Do not write a history archive when the review is done.
+  --history-dir PATH  Write history archives under this directory for this invocation.
+
+`discuss update --check` checks GitHub Releases for a newer version. Discuss never checks automatically.
+
+## Configuration
+
+Config sources are applied in this order, with later sources winning:
+  ~/.discuss/discuss.config.toml
+  ./discuss.config.toml
+  DISCUSS_* environment variables
+  CLI flags
+
+Supported settings:
+  port = 7777
+  auto_open = true
+  idle_timeout_secs = 600
+  history_dir = "/path/to/history"   # optional; default is ~/.discuss/history
+  no_save = false
+  log_level = "info"                 # optional; DISCUSS_LOG overrides it
+
+Environment variables:
+  DISCUSS_PORT
+  DISCUSS_AUTO_OPEN
+  DISCUSS_IDLE_TIMEOUT_SECS
+  DISCUSS_HISTORY_DIR
+  DISCUSS_NO_SAVE
+  DISCUSS_LOG
+
+Example `discuss.config.toml`:
+  port = 7777
+  auto_open = true
+  idle_timeout_secs = 600
+  history_dir = "/Users/alice/.discuss/history"
+  no_save = false
+  log_level = "info"
+
+## Runtime Model
+
+- `stdout` is reserved for JSONL events.
+- `stderr` is reserved for status and error text.
+- The first stdout event for a normal session is `session.started`.
+- When the review finishes, discuss emits `session.done` with the final transcript payload.
+- After `idle_timeout_secs` of inactivity, discuss emits `prompt.suggest_done`. Set `idle_timeout_secs = 0` to disable that prompt.
+- Logs are written under `~/.discuss/logs`.
+
+Event kinds:
+  session.started
+  thread.created
+  thread.deleted
+  thread.resolved
+  thread.unresolved
+  reply.added
+  take.added
+  draft.updated
+  draft.cleared
+  prompt.suggest_done
+  session.done
+
+## History Archives
+
+Unless `--no-save` or `no_save = true` is set, discuss writes the final transcript JSON to:
+  <history_dir>/<sanitized source stem>/<completed-at>.json
+
+Example:
+  ~/.discuss/history/review_plan/2026-04-23T02:30:00Z.json
+
+The `session.done` payload and the saved archive use the same transcript shape:
+  {
+    "threads": [
+      {
+        "id": "u-1",
+        "anchorStart": 2,
+        "anchorEnd": 3,
+        "snippet": "snippet u-1",
+        "breadcrumb": "Overview > Goals",
+        "text": "initial comment u-1",
+        "kind": "user",
+        "replies": [],
+        "takes": [],
+        "resolution": null,
+        "createdAt": "2026-04-23T02:30:02Z",
+        "deletedAt": null
+      }
+    ]
+  }
+
+## Exit Codes
+
+  0  Clean exit (Done, or update completed)
+  1  Generic failure (file not found, render error, logging error, update error)
+  2  Configuration / parse error
+  3  Port already in use (or other server bind failure)
+  5  Interrupted (Ctrl+C)
