@@ -3,8 +3,9 @@ use std::process::ExitCode;
 use clap::Parser;
 use discuss::cli::Args;
 
-fn main() -> ExitCode {
-    match discuss::run(Args::parse()) {
+#[tokio::main]
+async fn main() -> ExitCode {
+    match discuss::run(Args::parse()).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");

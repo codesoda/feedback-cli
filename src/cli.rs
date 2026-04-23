@@ -23,6 +23,14 @@ LLM ref: https://github.com/chrisraethke/discuss-cli/blob/main/llms.txt";
     after_long_help = HELP_FOOTER
 )]
 pub struct Args {
+    #[arg(
+        long,
+        value_name = "N",
+        value_parser = clap::value_parser!(u16).range(1..),
+        help = "Bind the local review server to this port"
+    )]
+    pub port: Option<u16>,
+
     #[arg(value_name = "FILE", help = "Markdown file to review")]
     pub file: Option<PathBuf>,
 
@@ -56,14 +64,33 @@ mod tests {
     fn parses_markdown_file_argument() {
         let args = Args::try_parse_from(["discuss", "plan.md"]).expect("file arg should parse");
 
+        assert_eq!(args.port, None);
         assert_eq!(args.file, Some(PathBuf::from("plan.md")));
         assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn parses_port_override() {
+        let args = Args::try_parse_from(["discuss", "--port", "8888", "plan.md"])
+            .expect("port arg should parse");
+
+        assert_eq!(args.port, Some(8888));
+        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+    }
+
+    #[test]
+    fn rejects_zero_port_override() {
+        let error = Args::try_parse_from(["discuss", "--port", "0", "plan.md"])
+            .expect_err("port 0 should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
     }
 
     #[test]
     fn parses_update_subcommand() {
         let args = Args::try_parse_from(["discuss", "update"]).expect("update should parse");
 
+        assert_eq!(args.port, None);
         assert!(args.file.is_none());
         assert!(matches!(args.command, Some(Commands::Update)));
     }

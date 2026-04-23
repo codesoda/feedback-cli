@@ -8,6 +8,7 @@
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
 - Use `Config::resolve(ConfigOverrides)` for full layered config resolution; file/env layers are partial so omitted keys do not reset lower-priority values.
+- Runtime launch resolves `--port` through `ConfigOverrides` and binds exactly `127.0.0.1:<port-or-7777>` via `serve`; do not add a free-port fallback because agent URLs must stay predictable.
 - Tracing initialization lives in `src/logging.rs`; it must use file-only output because stdout is reserved for JSON events and stderr is for human status.
 - Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
 - Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
@@ -302,4 +303,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: keep `discuss.html` completely free of `localStorage` and `STORAGE_KEY`; use seed/API/SSE plus `currentState` for browser state.
   - Gotchas encountered: stale instructional copy counts against the `grep -n localStorage discuss.html` acceptance check, not just executable JavaScript.
   - Useful context: no dev-browser/browser testing tool is available in this session; verification was `grep -n localStorage discuss.html`, main inline script parsing, strict Cargo checks, and the final installer smoke test.
+---
+## 2026-04-23 15:25:07 AEST - US-033
+- Implemented deterministic runtime port binding with top-level `--port <N>` CLI override, default port 7777, file-read launch path, and no free-port fallback.
+- Files changed: `src/cli.rs`, `src/lib.rs`, `src/main.rs`, `tests/cli.rs`, `tests/logging.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: `discuss <file>` now runs the long-lived server path, while quick binary success tests should use a non-serving command such as `discuss update`.
+  - Gotchas encountered: a file invocation in integration tests will hang unless the test uses a shutdown-capable helper or intentionally exercises an early failure such as a busy port.
+  - Useful context: verification included strict Cargo checks plus `PATH="$HOME/.local/bin:$PATH" ./install.sh` and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
 ---
