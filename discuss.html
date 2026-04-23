@@ -823,7 +823,9 @@
     if (rawReplies && typeof rawReplies === 'object') {
       Object.entries(rawReplies).forEach(([threadId, replies]) => {
         if (!followups[threadId]) followups[threadId] = [];
-        followups[threadId].push(...normalizeCommentList(replies));
+        normalizeCommentList(replies).forEach(reply => {
+          if (!hasComment(followups[threadId], reply)) followups[threadId].push(reply);
+        });
       });
     }
     userThreads.forEach(thread => {
@@ -836,19 +838,34 @@
         followups[thread.id].unshift({
           text: thread.text,
           addedAt: thread.createdAt,
+          kind: 'thread',
         });
       }
     });
     return followups;
   }
-  function normalizeCommentList(items) {
+  function normalizeCommentList(items, kind = 'reply') {
     if (!Array.isArray(items)) return [];
     return items
       .filter(item => item && typeof item === 'object')
       .map(item => ({
+        id: item.id == null ? null : String(item.id),
+        threadId: item.threadId == null ? null : String(item.threadId),
         text: item.text || '',
         addedAt: item.addedAt || item.createdAt || new Date().toISOString(),
+        kind: item.kind || kind,
       }));
+  }
+  function hasComment(items, candidate) {
+    if (!Array.isArray(items)) return false;
+    const candidateId = candidate.id == null ? null : String(candidate.id);
+    return items.some(item => {
+      if (!item) return false;
+      if (candidateId && item.id != null && String(item.id) === candidateId) return true;
+      return (item.kind || 'reply') === (candidate.kind || 'reply')
+        && item.text === candidate.text
+        && item.addedAt === candidate.addedAt;
+    });
   }
   function normalizeDrafts(rawDrafts) {
     const drafts = rawDrafts && typeof rawDrafts === 'object' ? rawDrafts : {};
@@ -937,6 +954,406 @@
   function threadApiPath(threadId, suffix = '') {
     return `/api/threads/${encodeURIComponent(threadId)}${suffix}`;
   }
+
+  // ---------- Server-sent events ----------
+  const SSE_EVENT_KINDS = [
+    'thread.created',
+    'thread.deleted',
+    'thread.resolved',
+    'thread.unresolved',
+    'reply.added',
+    'take.added',
+    'draft.updated',
+    'draft.cleared',
+  ];
+  const SSE_RECONNECT_DELAY_MS = 1000;
+  let eventSource = null;
+  let eventReconnectTimer = null;
+
+  function startEventStream() {
+    if (!('EventSource' in window)) {
+      console.warn('EventSource is not supported; live updates are disabled.');
+      return;
+    }
+    if (eventSource || eventReconnectTimer) return;
+
+    const source = new EventSource('/api/events');
+    eventSource = source;
+    SSE_EVENT_KINDS.forEach(kind => {
+      source.addEventListener(kind, (event) => {
+        const payload = parseEventPayload(kind, event);
+        if (payload) applyServerEvent(kind, payload);
+      });
+    });
+    source.onerror = () => {
+      if (eventSource === source) eventSource = null;
+      source.close();
+      scheduleEventReconnect();
+    };
+  }
+
+  function scheduleEventReconnect() {
+    if (eventReconnectTimer) return;
+    eventReconnectTimer = setTimeout(() => {
+      eventReconnectTimer = null;
+      startEventStream();
+    }, SSE_RECONNECT_DELAY_MS);
+  }
+
+  function parseEventPayload(kind, event) {
+    if (!event.data) return {};
+    try {
+      return JSON.parse(event.data);
+    } catch (error) {
+      console.error(`Failed to parse ${kind} SSE payload:`, error);
+      return null;
+    }
+  }
+
+  function applyServerEvent(kind, payload) {
+    switch (kind) {
+      case 'thread.created':
+        applyThreadCreatedEvent(payload);
+        break;
+      case 'thread.deleted':
+        applyThreadDeletedEvent(payload);
+        break;
+      case 'thread.resolved':
+        applyThreadResolvedEvent(payload);
+        break;
+      case 'thread.unresolved':
+        applyThreadUnresolvedEvent(payload);
+        break;
+      case 'reply.added':
+        applyReplyAddedEvent(payload);
+        break;
+      case 'take.added':
+        applyTakeAddedEvent(payload);
+        break;
+      case 'draft.updated':
+        applyDraftUpdatedEvent(payload);
+        break;
+      case 'draft.cleared':
+        applyDraftClearedEvent(payload);
+        break;
+    }
+  }
+
+  function normalizeThreadPayload(payload) {
+    const thread = normalizeUserThreads([payload])[0];
+    if (!thread) return null;
+    return {
+      ...thread,
+      breadcrumb: payload.breadcrumb || '',
+      kind: payload.kind || 'user',
+    };
+  }
+
+  function upsertThread(list, thread) {
+    const index = list.findIndex(item => String(item.id) === thread.id);
+    if (index >= 0) list[index] = { ...list[index], ...thread };
+    else list.push(thread);
+  }
+
+  function pendingThreadMatches(existing, incoming) {
+    return String(existing.id || '').startsWith('pending-')
+      && parseInt(existing.anchorStart, 10) === incoming.anchorStart
+      && parseInt(existing.anchorEnd, 10) === incoming.anchorEnd
+      && (existing.text || '') === incoming.text;
+  }
+
+  function reconcilePendingThread(state, incoming) {
+    const pending = state.userThreads.find(thread => pendingThreadMatches(thread, incoming))
+      || state.threads.find(thread => pendingThreadMatches(thread, incoming));
+    if (!pending) return;
+
+    const oldId = String(pending.id);
+    state.userThreads.forEach(thread => {
+      if (pendingThreadMatches(thread, incoming)) Object.assign(thread, incoming);
+    });
+    state.threads.forEach(thread => {
+      if (pendingThreadMatches(thread, incoming)) Object.assign(thread, incoming);
+    });
+    moveThreadStateKey(state, oldId, incoming.id);
+  }
+
+  function moveThreadStateKey(state, oldId, newId) {
+    if (!oldId || !newId || oldId === newId) return;
+    moveMapEntry(state.followups, oldId, newId);
+    moveMapEntry(state.replies, oldId, newId);
+    moveMapEntry(state.takes, oldId, newId);
+    moveMapEntry(state.resolutions, oldId, newId);
+    if (state.drafts && state.drafts.followup) {
+      moveMapEntry(state.drafts.followup, oldId, newId);
+    }
+  }
+
+  function moveMapEntry(map, oldId, newId) {
+    if (!map || !Object.prototype.hasOwnProperty.call(map, oldId)) return;
+    if (Array.isArray(map[oldId]) || Array.isArray(map[newId])) {
+      map[newId] = mergeCommentArrays(map[newId], map[oldId]);
+    } else if (!Object.prototype.hasOwnProperty.call(map, newId)) {
+      map[newId] = map[oldId];
+    }
+    delete map[oldId];
+  }
+
+  function mergeCommentArrays(first, second) {
+    const merged = Array.isArray(first) ? first.slice() : [];
+    (Array.isArray(second) ? second : []).forEach(item => {
+      if (!item) return;
+      const id = item.id == null ? null : String(item.id);
+      const duplicate = id
+        ? merged.some(existing => existing && String(existing.id) === id)
+        : merged.some(existing => existing
+          && existing.kind === item.kind
+          && existing.text === item.text
+          && existing.addedAt === item.addedAt);
+      if (!duplicate) merged.push(item);
+    });
+    return merged;
+  }
+
+  function ensureThreadInitialComment(state, thread) {
+    if (!thread.text || !thread.text.trim()) return;
+    if (!state.followups[thread.id]) state.followups[thread.id] = [];
+    const hasInitial = state.followups[thread.id].some(item =>
+      item && (item.kind === 'thread'
+        || ((item.kind == null || item.kind === 'reply')
+          && item.text === thread.text
+          && item.addedAt === thread.createdAt))
+    );
+    if (!hasInitial) {
+      state.followups[thread.id].unshift({
+        text: thread.text,
+        addedAt: thread.createdAt,
+        kind: 'thread',
+      });
+    }
+  }
+
+  function normalizeEventComment(payload, kind) {
+    const threadId = payload.threadId == null ? '' : String(payload.threadId);
+    const text = payload.text || '';
+    if (!threadId || !text) return null;
+    return {
+      id: payload.id == null ? null : String(payload.id),
+      threadId,
+      text,
+      addedAt: payload.addedAt || payload.createdAt || new Date().toISOString(),
+      kind,
+    };
+  }
+
+  function upsertDisplayComment(items, comment) {
+    const next = Array.isArray(items) ? items.slice() : [];
+    let index = comment.id
+      ? next.findIndex(item => item && String(item.id) === comment.id)
+      : -1;
+    if (index < 0) {
+      index = next.findIndex(item => item
+        && !item.id
+        && item.kind === comment.kind
+        && item.text === comment.text);
+    }
+
+    const normalized = {
+      id: comment.id,
+      threadId: comment.threadId,
+      text: comment.text,
+      addedAt: comment.addedAt,
+      kind: comment.kind,
+    };
+    if (index >= 0) next[index] = { ...next[index], ...normalized };
+    else next.push(normalized);
+    return next;
+  }
+
+  function upsertRawComment(items, comment) {
+    const next = Array.isArray(items) ? items.slice() : [];
+    const raw = {
+      id: comment.id,
+      threadId: comment.threadId,
+      text: comment.text,
+      createdAt: comment.addedAt,
+    };
+    const index = comment.id
+      ? next.findIndex(item => item && String(item.id) === comment.id)
+      : -1;
+    if (index >= 0) next[index] = { ...next[index], ...raw };
+    else next.push(raw);
+    return next;
+  }
+
+  function applyThreadCreatedEvent(payload) {
+    const thread = normalizeThreadPayload(payload);
+    if (!thread) return;
+
+    const state = cloneState(loadState());
+    const alreadyKnown = state.userThreads.some(item => String(item.id) === thread.id)
+      || state.threads.some(item => String(item.id) === thread.id);
+    if (!alreadyKnown) reconcilePendingThread(state, thread);
+
+    upsertThread(state.threads, thread);
+    if ((thread.kind || 'user') === 'user') upsertThread(state.userThreads, thread);
+    ensureThreadInitialComment(state, thread);
+    setCurrentState(state);
+    refreshAllThreadsFromState();
+  }
+
+  function applyReplyAddedEvent(payload) {
+    const reply = normalizeEventComment(payload, 'reply');
+    if (!reply) return;
+
+    const state = cloneState(loadState());
+    state.replies[reply.threadId] = upsertRawComment(state.replies[reply.threadId], reply);
+    state.followups[reply.threadId] = upsertDisplayComment(state.followups[reply.threadId], reply);
+    setCurrentState(state);
+    refreshThreadFromState(reply.threadId);
+  }
+
+  function applyTakeAddedEvent(payload) {
+    const take = normalizeEventComment(payload, 'take');
+    if (!take) return;
+
+    const state = cloneState(loadState());
+    state.takes[take.threadId] = upsertRawComment(state.takes[take.threadId], take);
+    setCurrentState(state);
+    refreshThreadFromState(take.threadId);
+  }
+
+  function applyThreadResolvedEvent(payload) {
+    const threadId = payload.threadId == null ? '' : String(payload.threadId);
+    const resolution = payload.resolution;
+    if (!threadId || !resolution) return;
+
+    const state = cloneState(loadState());
+    state.resolutions[threadId] = {
+      decision: resolution.decision || '',
+      resolvedAt: resolution.resolvedAt || new Date().toISOString(),
+    };
+    setCurrentState(state);
+    refreshThreadFromState(threadId);
+  }
+
+  function applyThreadUnresolvedEvent(payload) {
+    const threadId = payload.threadId == null ? '' : String(payload.threadId);
+    if (!threadId) return;
+
+    const state = cloneState(loadState());
+    delete state.resolutions[threadId];
+    setCurrentState(state);
+    refreshThreadFromState(threadId);
+  }
+
+  function applyThreadDeletedEvent(payload) {
+    const threadId = payload.threadId == null ? '' : String(payload.threadId);
+    if (!threadId) return;
+
+    const state = cloneState(loadState());
+    state.userThreads = state.userThreads.filter(thread => String(thread.id) !== threadId);
+    state.threads = state.threads.filter(thread => String(thread.id) !== threadId);
+    delete state.followups[threadId];
+    delete state.replies[threadId];
+    delete state.takes[threadId];
+    delete state.resolutions[threadId];
+    clearFollowupDraft(state, threadId);
+    setCurrentState(state);
+    refreshAllThreadsFromState();
+  }
+
+  function applyDraftUpdatedEvent(payload) {
+    const state = cloneState(loadState());
+    if (payload.scope === 'newThread') {
+      const anchorStart = parseInt(payload.anchorStart, 10);
+      const anchorEnd = parseInt(payload.anchorEnd, 10);
+      if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return;
+      state.drafts.newThread[newThreadDraftKey(anchorStart, anchorEnd)] = {
+        text: payload.text || '',
+        anchorStart,
+        anchorEnd,
+        savedAt: payload.updatedAt || new Date().toISOString(),
+      };
+    } else if (payload.scope === 'followup') {
+      const threadId = payload.threadId == null ? '' : String(payload.threadId);
+      if (!threadId) return;
+      state.drafts.followup[threadId] = {
+        text: payload.text || '',
+        savedAt: payload.updatedAt || new Date().toISOString(),
+      };
+      updateOpenFollowupDraftTextarea(threadId, payload.text || '');
+    } else {
+      return;
+    }
+
+    setCurrentState(state);
+    renderMarkers();
+    renderMetaStatus();
+    scheduleReposition();
+  }
+
+  function applyDraftClearedEvent(payload) {
+    const state = cloneState(loadState());
+    if (payload.scope === 'newThread') {
+      const anchorStart = parseInt(payload.anchorStart, 10);
+      const anchorEnd = parseInt(payload.anchorEnd, 10);
+      if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return;
+      clearNewThreadDraft(state, anchorStart, anchorEnd);
+    } else if (payload.scope === 'followup') {
+      const threadId = payload.threadId == null ? '' : String(payload.threadId);
+      if (!threadId) return;
+      clearFollowupDraft(state, threadId);
+      updateOpenFollowupDraftTextarea(threadId, '');
+    } else {
+      return;
+    }
+
+    setCurrentState(state);
+    renderMarkers();
+    renderMetaStatus();
+    scheduleReposition();
+  }
+
+  function refreshThreadFromState(threadId) {
+    const threadEl = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+    if (threadEl) {
+      renderFollowups(threadEl, threadId);
+      renderResolution(threadEl, threadId);
+    }
+    renderMarkers();
+    renderMetaStatus();
+    scheduleReposition();
+  }
+
+  function refreshAllThreadsFromState() {
+    const openIds = new Set(
+      Array.from(document.querySelectorAll('.thread.open'))
+        .map(thread => thread.getAttribute('data-thread-id'))
+        .filter(Boolean)
+    );
+    const showAll = showAllBtn.classList.contains('on');
+    renderAllThreads();
+    if (showAll) {
+      document.querySelectorAll('.thread').forEach(thread => thread.classList.add('open'));
+    } else {
+      openIds.forEach(threadId => {
+        const thread = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+        if (thread) thread.classList.add('open');
+      });
+    }
+    renderMarkers();
+    syncThreadActiveAnchors();
+    updateEmptyState();
+    scheduleReposition();
+  }
+
+  function updateOpenFollowupDraftTextarea(threadId, text) {
+    const threadEl = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+    const textarea = threadEl?.querySelector('.followup textarea');
+    if (!textarea || document.activeElement === textarea) return;
+    textarea.value = text;
+  }
+
   function clearMutationError(container) {
     if (!container) return;
     const existing = container.querySelector('.mutation-error');
@@ -1204,10 +1621,26 @@
     const list = threadEl.querySelector('.user-comment-list');
     if (!list) return;
     const s = loadState();
-    const items = s.followups[threadId] || [];
-    list.innerHTML = items.map(it =>
-      `<div class="user-comment">${escapeHtml(it.text)}<div class="meta">${new Date(it.addedAt).toLocaleString()}</div></div>`
-    ).join('');
+    const items = commentsForThread(s, threadId);
+    list.innerHTML = items.map(it => {
+      const metaPrefix = it.kind === 'take' ? 'Agent take · ' : '';
+      return `<div class="user-comment" data-kind="${escapeHtml(it.kind || 'reply')}">${escapeHtml(it.text)}<div class="meta">${escapeHtml(metaPrefix)}${new Date(it.addedAt).toLocaleString()}</div></div>`;
+    }).join('');
+  }
+
+  function commentsForThread(state, threadId) {
+    const items = (state.followups[threadId] || [])
+      .map(item => ({ ...item, kind: item.kind || 'reply' }));
+    const seenTakeIds = new Set(
+      items
+        .filter(item => item.kind === 'take' && item.id)
+        .map(item => String(item.id))
+    );
+    normalizeCommentList(state.takes[threadId] || [], 'take').forEach(take => {
+      if (take.id && seenTakeIds.has(take.id)) return;
+      items.push(take);
+    });
+    return items;
   }
 
   function wireFollowup(threadEl, threadId) {
@@ -1230,7 +1663,7 @@
       const s = cloneState(previousState);
       const addedAt = new Date().toISOString();
       if (!s.followups[threadId]) s.followups[threadId] = [];
-      s.followups[threadId].push({ text, addedAt });
+      s.followups[threadId].push({ text, addedAt, kind: 'reply' });
       clearFollowupDraft(s, threadId);
       setCurrentState(s);
       ta.value = '';
@@ -1243,6 +1676,8 @@
         const items = syncedState.followups[threadId] || [];
         const optimistic = items.find(item => item.text === text && item.addedAt === addedAt);
         if (optimistic && reply) {
+          optimistic.id = reply.id || optimistic.id;
+          optimistic.kind = 'reply';
           optimistic.text = reply.text || optimistic.text;
           optimistic.addedAt = reply.createdAt || optimistic.addedAt;
         }
@@ -1592,7 +2027,21 @@
     });
 
     // Keep the header in sync — it surfaces draft count too.
+    syncOpenThreadMarkerClasses();
     renderMetaStatus();
+  }
+
+  function syncOpenThreadMarkerClasses() {
+    const openIds = new Set(
+      Array.from(document.querySelectorAll('.thread.open'))
+        .map(thread => thread.getAttribute('data-thread-id'))
+        .filter(Boolean)
+    );
+    document.querySelectorAll('.thread-marker').forEach(marker => {
+      const threadId = marker.getAttribute('data-thread-id');
+      if (threadId && openIds.has(threadId)) marker.classList.add('active');
+      else marker.classList.remove('active');
+    });
   }
 
   // ---------- Tooltip ----------
@@ -1795,7 +2244,7 @@
         kind: 'user',
       });
       if (!s.followups[id]) s.followups[id] = [];
-      s.followups[id].push({ text, addedAt: createdAt });
+      s.followups[id].push({ text, addedAt: createdAt, kind: 'thread' });
       clearNewThreadDraft(s, startIdx, endIdx);
       setCurrentState(s);
       closeNewThreadEditor();
@@ -1828,7 +2277,7 @@
         }
         syncedState.followups[serverId] = (syncedState.followups[id] || [{ text, addedAt: serverCreatedAt }])
           .map(item => item.text === text && item.addedAt === createdAt
-            ? { ...item, addedAt: serverCreatedAt }
+            ? { ...item, addedAt: serverCreatedAt, kind: item.kind || 'thread' }
             : item);
         delete syncedState.followups[id];
         setCurrentState(syncedState);
@@ -2093,6 +2542,11 @@
   hydrateState().then(() => {
     renderAllThreads();
     scheduleReposition();
+    startEventStream();
+  });
+  window.addEventListener('beforeunload', () => {
+    if (eventReconnectTimer) clearTimeout(eventReconnectTimer);
+    if (eventSource) eventSource.close();
   });
   window.addEventListener('load', scheduleReposition);
   window.addEventListener('resize', reposition);

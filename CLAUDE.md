@@ -19,6 +19,7 @@
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - `discuss.html` hydrates state seed-first from `window.__DISCUSS_INITIAL_STATE__`, falling back to `GET /api/state`; keep `normalizeState` adapting server `StateSnapshot` fields into the legacy `userThreads`/`followups` renderer shape until the REST/SSE frontend migration is complete.
+- `discuss.html` starts its `/api/events` `EventSource` only after hydration and initial render; incremental event handlers must be idempotent because the mutating tab receives its own SSE echo after optimistic UI updates.
 - Server-backed thread mutations in `discuss.html` should use `apiJson` and `threadApiPath` with optimistic state snapshots and rollback on HTTP failure; do not reintroduce `saveState` for threads/replies/resolutions/deletes.
 - Browser REST mutation failures in `discuss.html` should restore user input, rollback optimistic state, and call `showMutationError(...)` with a Retry closure instead of using `alert()` or dropping text.
 - There is no v1 delete-reply endpoint, so the browser should not offer local-only follow-up deletion unless a matching REST API is added.

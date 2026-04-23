@@ -235,4 +235,23 @@ mod tests {
         assert!(page.contains("showMutationError(newThreadEditor, \"couldn't save"));
         assert!(!page.contains("alert("));
     }
+
+    #[test]
+    fn bundled_template_subscribes_to_sse_and_applies_incremental_events() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains("new EventSource('/api/events')"));
+        assert!(page.contains("'thread.created'"));
+        assert!(page.contains("'thread.deleted'"));
+        assert!(page.contains("'thread.resolved'"));
+        assert!(page.contains("'thread.unresolved'"));
+        assert!(page.contains("'reply.added'"));
+        assert!(page.contains("'take.added'"));
+        assert!(page.contains("'draft.updated'"));
+        assert!(page.contains("'draft.cleared'"));
+        assert!(page.contains("function applyServerEvent(kind, payload)"));
+        assert!(page.contains("function scheduleEventReconnect()"));
+        assert!(page.contains("refreshAllThreadsFromState()"));
+        assert!(page.contains("refreshThreadFromState(reply.threadId)"));
+    }
 }

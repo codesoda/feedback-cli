@@ -21,6 +21,7 @@
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - `discuss.html` hydrates state seed-first from `window.__DISCUSS_INITIAL_STATE__`, falling back to `GET /api/state`; keep `normalizeState` adapting server `StateSnapshot` fields into the legacy `userThreads`/`followups` renderer shape until the REST/SSE frontend migration is complete.
+- `discuss.html` starts its `/api/events` `EventSource` only after hydration and initial render; incremental event handlers must be idempotent because the mutating tab receives its own SSE echo after optimistic UI updates.
 - Server-backed thread mutations in `discuss.html` should use `apiJson` and `threadApiPath` with optimistic state snapshots and rollback on HTTP failure; do not reintroduce `saveState` for threads/replies/resolutions/deletes.
 - Browser REST mutation failures in `discuss.html` should restore user input, rollback optimistic state, and call `showMutationError(...)` with a Retry closure instead of using `alert()` or dropping text.
 - There is no v1 delete-reply endpoint, so the browser should not offer local-only follow-up deletion unless a matching REST API is added.
@@ -266,4 +267,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: browser REST failures should use `showMutationError(...)` after rolling back optimistic state and restoring text, with Retry callbacks that re-fire the same UI mutation.
   - Gotchas encountered: unresolve and delete failures re-render their thread cards during rollback, so the inline error must be attached after the restored DOM exists.
   - Useful context: no dev-browser/browser testing tool is available in this session; verification was JavaScript parse checking, strict Cargo checks, and the final installer smoke test.
+---
+## 2026-04-23 14:55:22 AEST - US-030
+- Implemented frontend SSE subscription to `/api/events` after hydration, with incremental handlers for thread, reply, take, resolution, deletion, and draft broadcasts.
+- Files changed: `discuss.html`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: EventSource startup belongs after initial state hydration/render, and SSE handlers should update `currentState` then re-render affected cards/markers rather than fetching full state.
+  - Gotchas encountered: mutation tabs receive their own SSE echo after optimistic updates, so handlers need duplicate-safe IDs and pending-thread reconciliation.
+  - Useful context: no dev-browser/browser testing tool is available in this session; manual two-tab browser verification is still needed, but the main inline script parse, strict Cargo checks, and installer smoke test passed.
 ---
