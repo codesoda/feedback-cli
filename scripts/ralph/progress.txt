@@ -22,6 +22,7 @@
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - `discuss.html` hydrates state seed-first from `window.__DISCUSS_INITIAL_STATE__`, falling back to `GET /api/state`; keep `normalizeState` adapting server `StateSnapshot` fields into the legacy `userThreads`/`followups` renderer shape until the REST/SSE frontend migration is complete.
+- `discuss.html` must not use `localStorage` or `STORAGE_KEY`; state should flow through the server seed, REST mutation helpers, SSE updates, and the in-memory `currentState` mirror only.
 - `discuss.html` starts its `/api/events` `EventSource` only after hydration and initial render; incremental event handlers must be idempotent because the mutating tab receives its own SSE echo after optimistic UI updates.
 - Server-backed thread mutations in `discuss.html` should use `apiJson` and `threadApiPath` with optimistic state snapshots and rollback on HTTP failure; do not reintroduce `saveState` for threads/replies/resolutions/deletes.
 - Browser REST mutation failures in `discuss.html` should restore user input, rollback optimistic state, and call `showMutationError(...)` with a Retry closure instead of using `alert()` or dropping text.
@@ -293,4 +294,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: draft writes should be queued per draft key in the browser so an older in-flight save cannot land after a newer clear and resurrect a stale draft.
   - Gotchas encountered: saving a thread/reply/resolve must clear the matching server draft after the primary mutation succeeds; otherwise reload hydration can bring back text that the UI already cleared.
   - Useful context: no dev-browser/browser testing tool is available in this session; verification was main inline script parsing, template regression tests, strict Cargo checks, and the final installer smoke test.
+---
+## 2026-04-23 15:16:22 AEST - US-029
+- Removed the browser storage key and all remaining `localStorage` mentions/usages from `discuss.html`; state now stays in the server-backed `currentState` mirror only.
+- Files changed: `discuss.html`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep `discuss.html` completely free of `localStorage` and `STORAGE_KEY`; use seed/API/SSE plus `currentState` for browser state.
+  - Gotchas encountered: stale instructional copy counts against the `grep -n localStorage discuss.html` acceptance check, not just executable JavaScript.
+  - Useful context: no dev-browser/browser testing tool is available in this session; verification was `grep -n localStorage discuss.html`, main inline script parsing, strict Cargo checks, and the final installer smoke test.
 ---

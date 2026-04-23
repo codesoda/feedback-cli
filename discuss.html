@@ -6,8 +6,8 @@
     A single-file HTML document that lets a human reviewer click any text
     element (heading, paragraph, list item, quote, code block, etc.) and
     attach a contextual comment. Threads render on the right, anchored to
-    their element on the left. Comments persist in localStorage. A "Copy
-    All" button exports every comment with a stable anchor id, breadcrumb
+    their element on the left. Comments persist through the discuss server.
+    A "Copy All" button exports every comment with a stable anchor id, breadcrumb
     path, and text snippet so a downstream AI assistant (or human) can
     reconcile each comment with the exact element it is attached to.
 
@@ -38,9 +38,9 @@
     - Show-all toggle to pin every thread open at once.
     - Copy All exports anchor + snippet + follow-ups per thread.
 
-  Storage key
-    contextual-discuss-v2 — change this if you embed the template in a
-    site with multiple pages so each page has its own localStorage slice.
+  State
+    Runtime state is hydrated from the discuss server and mutated through
+    the server API so reloads and tabs share the same session state.
 -->
 <html lang="en">
 <head>
@@ -737,7 +737,7 @@
         </ol>
 
         <blockquote>
-          Thread anchors survive reloads because they bind to <code>data-anchor-idx</code> (the 1-based position of the commentable element within <code>#doc-content</code>). If you re-order elements between reviews, previously-saved threads may misalign — start with a fresh <code>localStorage</code> state in that case.
+          Thread anchors survive reloads because they bind to <code>data-anchor-idx</code> (the 1-based position of the commentable element within <code>#doc-content</code>). If you re-order elements between reviews, previously-saved threads may misalign — start a new server session in that case.
         </blockquote>
 
         <h2>Prepopulated threads</h2>
@@ -779,7 +779,6 @@
 
 <script>
 (function() {
-  const STORAGE_KEY = 'contextual-discuss-v2';
   const stateSeed = Object.prototype.hasOwnProperty.call(window, '__DISCUSS_INITIAL_STATE__')
     ? window.__DISCUSS_INITIAL_STATE__
     : null;
@@ -941,7 +940,6 @@
   }
   function saveState(s) {
     currentState = setCurrentState(s);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(currentState));
   }
   async function apiJson(path, { method = 'POST', body } = {}) {
     const options = { method, headers: { Accept: 'application/json' } };

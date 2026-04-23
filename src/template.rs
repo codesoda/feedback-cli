@@ -216,7 +216,8 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
-        assert!(!page.contains("localStorage.getItem"));
+        assert!(!page.contains("localStorage"));
+        assert!(!page.contains("STORAGE_KEY"));
     }
 
     #[test]
