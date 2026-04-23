@@ -3,7 +3,11 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
+use axum::extract::State as AxumState;
+use axum::http::header;
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
 use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -12,13 +16,14 @@ use tower_http::trace::TraceLayer;
 use crate::events::EventEmitter;
 use crate::sse::EventBus;
 use crate::state::{SharedState, State};
-use crate::{DiscussError, Result};
+use crate::{render, template, DiscussError, Result};
 
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub state: SharedState,
     pub bus: Arc<EventBus>,
     pub emitter: Arc<EventEmitter>,
+    markdown_source: Arc<str>,
     shutdown: ShutdownSignal,
 }
 
@@ -28,6 +33,7 @@ impl AppState {
             state,
             bus,
             emitter,
+            markdown_source: Arc::from(""),
             shutdown: ShutdownSignal::new(),
         }
     }
@@ -38,6 +44,12 @@ impl AppState {
             Arc::new(EventBus::new(1024)),
             Arc::new(EventEmitter::stdout()),
         )
+    }
+
+    pub fn with_markdown_source(mut self, markdown_source: impl Into<String>) -> Self {
+        let markdown_source = markdown_source.into();
+        self.markdown_source = Arc::from(markdown_source.into_boxed_str());
+        self
     }
 
     pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
@@ -95,9 +107,38 @@ where
 
 fn build_router(app_state: AppState) -> Router {
     Router::new()
+        .route("/", get(get_root))
         .fallback(not_found)
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)
+}
+
+async fn get_root(AxumState(app_state): AxumState<AppState>) -> Response {
+    match render_root_page(&app_state) {
+        Ok(page) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            page,
+        )
+            .into_response(),
+        Err(message) => (StatusCode::INTERNAL_SERVER_ERROR, message).into_response(),
+    }
+}
+
+fn render_root_page(app_state: &AppState) -> std::result::Result<String, String> {
+    let snapshot = app_state
+        .state
+        .read()
+        .map_err(|_| "state lock poisoned while rendering page".to_string())?
+        .snapshot();
+    let initial_state_json = serde_json::to_string(&snapshot)
+        .map_err(|error| format!("failed to serialize initial state: {error}"))?;
+    let rendered_markdown = render::render(app_state.markdown_source.as_ref());
+
+    Ok(template::render_page(
+        &rendered_markdown,
+        &initial_state_json,
+    ))
 }
 
 async fn not_found() -> StatusCode {

@@ -2,6 +2,8 @@ use std::future::pending;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
 use std::time::Duration;
 
+use chrono::{DateTime, TimeZone, Utc};
+use discuss::state::{Thread, ThreadId, ThreadKind};
 use discuss::{serve, AppState, DiscussError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -9,9 +11,9 @@ use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
 
 #[tokio::test]
-async fn get_root_returns_placeholder_response_and_shutdown_completes() {
+async fn get_root_renders_template_and_shutdown_completes() {
     let addr = free_loopback_addr();
-    let app_state = AppState::for_process();
+    let app_state = AppState::for_process().with_markdown_source("# Review Plan\n\nBody text.");
     let mut shutdown_rx = app_state.subscribe_shutdown();
     let (shutdown_tx, shutdown_rx_signal) = oneshot::channel();
     let server = tokio::spawn(serve(addr, app_state, async move {
@@ -21,7 +23,11 @@ async fn get_root_returns_placeholder_response_and_shutdown_completes() {
     wait_for_server(addr).await;
 
     let response = get_root(addr).await;
-    assert!(response.starts_with("HTTP/1.1 404"));
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("content-type: text/html; charset=utf-8"));
+    assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), shutdown_rx.changed())
@@ -40,7 +46,7 @@ async fn get_root_returns_placeholder_response_and_shutdown_completes() {
 #[tokio::test]
 async fn shutdown_allows_started_request_to_complete() {
     let addr = free_loopback_addr();
-    let app_state = AppState::for_process();
+    let app_state = AppState::for_process().with_markdown_source("# Started Request");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(serve(addr, app_state, async move {
         let _ = shutdown_rx.await;
@@ -64,8 +70,42 @@ async fn shutdown_allows_started_request_to_complete() {
         .read_to_string(&mut response)
         .await
         .expect("read response");
-    assert!(response.starts_with("HTTP/1.1 404"));
+    assert!(response.starts_with("HTTP/1.1 200"));
 
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_root_seeds_current_state_for_reload() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# State Seed");
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        state.add_thread(thread("u-one", 1));
+        state.add_thread(thread("u-two", 4));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_root(addr).await;
+    let initial_state = initial_state_script(response_body(&response));
+
+    assert!(initial_state.contains("\"u-one\""));
+    assert!(initial_state.contains("\"u-two\""));
+    assert!(doc_content(response_body(&response)).contains("<h1>State Seed</h1>"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
         .await
         .expect("server exits within timeout")
@@ -135,4 +175,48 @@ async fn get_root(addr: SocketAddr) -> String {
         .await
         .expect("read response");
     response
+}
+
+fn timestamp(second: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 4, 23, 2, 30, second)
+        .single()
+        .expect("valid timestamp")
+}
+
+fn thread(id: &str, anchor_start: usize) -> Thread {
+    Thread {
+        id: ThreadId(id.to_string()),
+        anchor_start,
+        anchor_end: anchor_start + 1,
+        snippet: format!("snippet {id}"),
+        breadcrumb: "Overview".to_string(),
+        text: format!("thread {id}"),
+        created_at: timestamp(0),
+        kind: ThreadKind::User,
+    }
+}
+
+fn response_body(response: &str) -> &str {
+    response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("http response should contain a body separator")
+}
+
+fn doc_content(body: &str) -> &str {
+    let open = "<section id=\"doc-content\">";
+    let close = "</section>";
+    let start = body.find(open).expect("doc-content start") + open.len();
+    let end = body[start..].find(close).expect("doc-content end") + start;
+
+    &body[start..end]
+}
+
+fn initial_state_script(body: &str) -> &str {
+    let open = "<script id=\"discuss-initial-state\">";
+    let close = "</script>";
+    let start = body.find(open).expect("initial-state script start") + open.len();
+    let end = body[start..].find(close).expect("initial-state script end") + start;
+
+    &body[start..end]
 }

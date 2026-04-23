@@ -16,6 +16,7 @@
 - Stdout JSON events live in `src/events.rs`; route all machine-readable stdout writes through `EventEmitter` and keep human-readable output on stderr or tracing.
 - Browser SSE broadcasts live in `src/sse.rs`; use `EventBus` as an `Arc`-friendly Tokio broadcast wrapper alongside `SharedState`, and keep `BroadcastEvent` distinct from stdout `Event`.
 - Axum server bootstrap lives in `src/server.rs`; use `AppState::for_process()` for production shared state and `serve(addr, app_state, shutdown)` for the 127.0.0.1-only graceful server wrapper.
+- Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -130,4 +131,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: server setup belongs in `src/server.rs`; `AppState::for_process()` wires `SharedState`, `Arc<EventBus>`, `Arc<EventEmitter>`, and the shutdown notifier for future handlers.
   - Gotchas encountered: axum graceful shutdown closes idle partial HTTP requests, so tests should assert completed request handling rather than treating incomplete headers as in-flight work.
   - Useful context: `serve` currently returns a placeholder 404 for all routes; US-015 and later stories should replace routes without changing bind/error/shutdown behavior.
+---
+## 2026-04-23 13:17:41 AEST - US-015
+- Implemented `GET /` to render the held markdown source through the bundled template, seed the current state snapshot into `window.__DISCUSS_INITIAL_STATE__`, and return `text/html; charset=utf-8`.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: attach markdown source to `AppState` with `with_markdown_source(...)`; route handlers should snapshot shared state before serializing browser-facing JSON.
+  - Gotchas encountered: existing server tests expected the placeholder 404, so future route stories should update graceful-shutdown assertions to match the real route status.
+  - Useful context: no browser testing tool was available; HTML rendering and reload state seeding are covered by integration tests.
 ---
