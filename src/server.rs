@@ -8,6 +8,7 @@ use axum::http::header;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum::Json;
 use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -112,6 +113,7 @@ where
 fn build_router(app_state: AppState) -> Router {
     Router::new()
         .route("/", get(get_root))
+        .route("/api/state", get(get_api_state))
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .fallback(not_found)
@@ -145,6 +147,17 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         &rendered_markdown,
         &initial_state_json,
     ))
+}
+
+async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {
+    match app_state.state.read() {
+        Ok(state) => Json(state.snapshot()).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "state lock poisoned while reading state",
+        )
+            .into_response(),
+    }
 }
 
 async fn get_mermaid_js() -> impl IntoResponse {

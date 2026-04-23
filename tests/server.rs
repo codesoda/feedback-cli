@@ -6,6 +6,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
 use discuss::state::{Thread, ThreadId, ThreadKind};
 use discuss::{serve, AppState, DiscussError};
+use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -105,6 +106,76 @@ async fn get_root_seeds_current_state_for_reload() {
     assert!(initial_state.contains("\"u-one\""));
     assert!(initial_state.contains("\"u-two\""));
     assert!(doc_content(response_body(&response)).contains("<h1>State Seed</h1>"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_state_returns_empty_snapshot_json() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/state").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    assert_eq!(
+        response_json(&response),
+        json!({
+            "threads": [],
+            "replies": {},
+            "takes": {},
+            "resolutions": {},
+            "drafts": {
+                "newThread": {},
+                "followup": {}
+            }
+        })
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_state_returns_seeded_threads() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process();
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        state.add_thread(thread("u-state", 2));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/state").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_json_headers(&response);
+    let state = response_json(&response);
+
+    assert_eq!(state["threads"][0]["id"], "u-state");
+    assert_eq!(state["threads"][0]["anchorStart"], 2);
+    assert_eq!(state["threads"][0]["text"], "thread u-state");
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -258,6 +329,11 @@ fn assert_js_headers(response: &str) {
     assert!(headers.contains("cache-control: public, max-age=86400"));
 }
 
+fn assert_json_headers(response: &str) {
+    let headers = response.to_ascii_lowercase();
+    assert!(headers.contains("content-type: application/json"));
+}
+
 fn timestamp(second: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 23, 2, 30, second)
         .single()
@@ -282,6 +358,10 @@ fn response_body(response: &str) -> &str {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .expect("http response should contain a body separator")
+}
+
+fn response_json(response: &str) -> Value {
+    serde_json::from_str(response_body(response)).expect("response body should be JSON")
 }
 
 fn doc_content(body: &str) -> &str {

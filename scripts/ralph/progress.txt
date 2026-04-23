@@ -18,6 +18,7 @@
 - Browser SSE broadcasts live in `src/sse.rs`; use `EventBus` as an `Arc`-friendly Tokio broadcast wrapper alongside `SharedState`, and keep `BroadcastEvent` distinct from stdout `Event`.
 - Axum server bootstrap lives in `src/server.rs`; use `AppState::for_process()` for production shared state and `serve(addr, app_state, shutdown)` for the 127.0.0.1-only graceful server wrapper.
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
+- Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -148,4 +149,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: static browser assets should continue to be served through exact Axum routes in `src/server.rs` from `src/assets.rs`, not via filesystem directory serving.
   - Gotchas encountered: raw HTTP integration tests can reuse the existing `TcpStream` helper pattern; add path support there instead of introducing a new test HTTP client dependency.
   - Useful context: unknown `/assets/*` paths naturally hit the existing fallback 404, satisfying the no-directory-listing requirement.
+---
+## 2026-04-23 13:33:04 AEST - US-017
+- Implemented `GET /api/state` to return the current `State::snapshot()` as `application/json`.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: browser-facing state JSON should come directly from `State::snapshot()` so reload hydration and API hydration stay in lockstep.
+  - Gotchas encountered: raw HTTP integration tests can parse response bodies as `serde_json::Value` to assert exact snapshot shape without depending on field order.
+  - Useful context: `GET /api/state` is read-only; mutation handlers should remain responsible for stdout events and SSE broadcasts in later stories.
 ---
