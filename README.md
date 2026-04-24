@@ -17,6 +17,14 @@ Markdown is how engineers share everything that isn't code — PRDs, design docs
 
 ## Install
 
+### Pre-built binary (`curl | sh`)
+
+```sh
+curl -sSL https://raw.githubusercontent.com/codesoda/discuss-cli/main/install.sh | sh
+```
+
+Downloads the latest release tarball from GitHub, installs the binary to `~/.discuss/bin/`, and symlinks `~/.local/bin/discuss`. Skill is **not** installed on this path — pair with `npx skills add` below, or let your agent install it on first use.
+
 ### Full install (CLI + skill) from a clone
 
 ```sh
