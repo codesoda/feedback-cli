@@ -1,8 +1,10 @@
-# discuss
+# Discuss CLI
 
-**Stop copy-pasting markdown into Claude. Argue back in the margins.**
+Turn agent plans and Markdown docs into an AI-native review surface.
 
-`discuss` is a CLI that opens any markdown file in a browser with inline comment threads on every paragraph. Your AI agent (Claude Code, Codex) joins the session, reads what you highlight, and posts its own "takes" right in the margins. Review docs like you review PRs — anchored, threaded, bidirectional. No cloud, no copy-paste.
+`discuss` is a local CLI that opens any Markdown file in your browser with real-time, PR-style comment threads on every paragraph. Your coding agent joins the session, reads the exact text under discussion, and argues back in the margins.
+
+Anchored. Threaded. Bidirectional. No cloud. No copy-paste.
 
 ## Why?
 
