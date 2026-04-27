@@ -54,6 +54,12 @@ where
         file,
         command,
     } = args;
+
+    if command.is_none() && file.is_none() && io::stdin().is_terminal() {
+        eprintln!("{}", cli::Args::command().render_long_help());
+        std::process::exit(exit::EXIT_CONFIG_ERROR);
+    }
+
     let config = Config::resolve(ConfigOverrides {
         port,
         auto_open: no_open.then_some(false),
@@ -75,10 +81,8 @@ where
             Ok(())
         }
         None => {
-            let Some(input) = resolve_input(file)? else {
-                eprintln!("{}", cli::Args::command().render_long_help());
-                return Ok(());
-            };
+            let input =
+                resolve_input(file)?.expect("no-input case is short-circuited before tracing init");
             let MarkdownInput {
                 markdown_source,
                 source_path,
