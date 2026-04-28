@@ -508,8 +508,8 @@
   #selection-popup {
     position: fixed;
     z-index: 200;
-    background: var(--accent);
-    color: white;
+    background: var(--ink);
+    color: var(--bg);
     padding: 5px 11px;
     border-radius: 16px;
     font-size: 12px;
@@ -518,8 +518,10 @@
     user-select: none;
     display: none;
     font-weight: 500;
+    transition: background 0.12s, color 0.12s;
   }
-  #selection-popup:hover { filter: brightness(1.08); }
+  #selection-popup.shown { display: block; }
+  #selection-popup:hover { background: var(--accent); color: white; }
 
   /* --- Right pane: threads --- */
   .pane-right .empty-state {
@@ -3075,7 +3077,7 @@
   }
   function updateSelectionPopup() {
     const info = selectionRange();
-    if (!info) { selectionPopup.style.display = 'none'; return; }
+    if (!info) { selectionPopup.classList.remove('shown'); return; }
     const { rect } = info;
     const popupW = 110;
     let x = rect.right - popupW - 6;
@@ -3084,7 +3086,7 @@
     if (x < 10) x = 10;
     selectionPopup.style.left = x + 'px';
     selectionPopup.style.top = y + 'px';
-    selectionPopup.style.display = 'block';
+    selectionPopup.classList.add('shown');
     selectionPopup.dataset.startIdx = info.startIdx;
     selectionPopup.dataset.endIdx = info.endIdx;
     if (info.lineRange) {
@@ -3108,7 +3110,7 @@
     const lineRange = Number.isFinite(lineStart) && Number.isFinite(lineEnd)
       ? { start: lineStart, end: lineEnd }
       : null;
-    selectionPopup.style.display = 'none';
+    selectionPopup.classList.remove('shown');
     window.getSelection()?.removeAllRanges?.();
     openNewThreadEditor(startIdx, endIdx, { lineRange });
   });
