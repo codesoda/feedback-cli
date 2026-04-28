@@ -45,6 +45,33 @@
 <head>
 <meta charset="utf-8">
 <title>Contextual Discussion Template</title>
+
+<!--
+  Prism syntax highlighting (loaded from unpkg).
+  To bump Prism, search-replace the version in every URL on this page.
+  Grammars beyond the directly-linked plugins load on demand via the autoloader.
+-->
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism.min.css" data-prism-theme="light">
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css" data-prism-theme="dark">
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.css">
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
+
+<!-- Pre-paint theme bootstrap: prevents flash of wrong theme on reload. -->
+<script id="discuss-theme-bootstrap">
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+  var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
+  var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+  var root = document.documentElement;
+  root.dataset.theme = effective;
+  root.dataset.themeMode = mode;
+  document.querySelectorAll('link[data-prism-theme]').forEach(function (link) {
+    link.disabled = (link.dataset.prismTheme !== effective);
+  });
+})();
+</script>
 <style>
   :root {
     --bg: #f7f7f5;
@@ -79,6 +106,35 @@
     --divider-w: 6px;
     --left-gutter: 44px;
     --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  }
+  html[data-theme="dark"] {
+    --bg: #1a1a1a;
+    --card: #252525;
+    --ink: #e8e8e6;
+    --muted: #a8a8a4;
+    --accent: #5a9bff;
+    --accent-soft: rgba(90, 155, 255, 0.18);
+    --accent-hover: rgba(90, 155, 255, 0.10);
+    --accent-dashed: rgba(90, 155, 255, 0.45);
+    --accent-range: rgba(90, 155, 255, 0.18);
+    --line: #3a3a38;
+    --line-strong: #4c4c48;
+    --quote: #3a3210;
+    --quote-border: #8a7838;
+    --context: #2a2a28;
+    --decision: #1f3526;
+    --decision-border: #4a8862;
+    --callout: #1a2a3f;
+    --callout-border: #3a6aa8;
+    --user-note: #3a1f29;
+    --user-note-border: #8a4a5f;
+    --pending: #3a3210;
+    --pending-border: #6a5a30;
+    --pending-dark: #c8a85a;
+    --pre-bg: #2d2d2c;
+    --marker-blue: #5a9bff;
+    --marker-yellow: #f0c860;
+    --marker-pink: #e87a9c;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
@@ -115,8 +171,26 @@
     border-radius: 6px;
     cursor: pointer;
   }
-  header .toggle:hover { background: #f5f5f5; }
+  header .toggle:hover { background: var(--accent-hover); }
+  html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
   header .toggle.on { background: var(--accent); color: white; border-color: var(--accent); }
+  header .theme-toggle {
+    font: inherit;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    color: var(--muted);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  header .theme-toggle:hover { background: var(--accent-hover); color: var(--ink); }
+  header .theme-toggle .theme-icon { width: 18px; height: 18px; }
+  header .theme-toggle .theme-icon[hidden] { display: none; }
   #copy-all {
     font: inherit;
     padding: 7px 14px;
@@ -235,6 +309,11 @@
     line-height: 1.45;
     margin: 10px 0;
   }
+  /* Prism's line-numbers plugin positions a gutter at left: -3.8em and expects
+     pre to carry padding-left: 3.8em so the gutter sits inside the pre. Our
+     id-scoped padding above wins on specificity, so we have to restate the
+     left padding under the same id-scope when line-numbers is on. */
+  #doc-content pre.line-numbers { padding-left: 3.8em; }
   #doc-content pre code { background: none; padding: 0; font-size: inherit; }
   #doc-content blockquote {
     margin: 10px 0;
@@ -633,6 +712,55 @@
     font-style: italic;
     margin-top: 4px;
   }
+  /* Line-range thread indicator: thin colored bar at the inside-right edge
+     of the line-numbers gutter for each line covered by a thread. We use
+     box-shadow rather than ::before so we don't override Prism's
+     `::before { content: counter(linenumber) }` that renders the line number. */
+  .line-numbers-rows > span.has-thread-line {
+    box-shadow: inset -3px 0 0 0 var(--marker-pink);
+  }
+  .line-numbers-rows > span.has-thread-line.thread-resolved-line {
+    box-shadow: inset -3px 0 0 0 rgba(46, 125, 50, 0.6);
+  }
+  /* Active draft on a single line: tint the gutter row so the user sees what
+     they're commenting on without the big block-level outline. */
+  .line-numbers-rows > span.draft-active-line {
+    background: var(--accent-soft);
+    box-shadow: inset -3px 0 0 0 var(--accent);
+  }
+  /* Open-thread highlight on a single line: yellow tint + accent border on the
+     gutter row(s) so the user sees which lines the open thread is about,
+     instead of painting the whole code block. */
+  .line-numbers-rows > span.thread-active-line {
+    background: rgba(255, 236, 139, 0.55);
+    box-shadow: inset -3px 0 0 0 var(--accent);
+  }
+  /* Click-to-comment per line: each Prism line-number row is a click target.
+     The whole row gets a hover background plus a 💬 affordance in the gutter. */
+  pre.line-numbers .line-numbers-rows {
+    pointer-events: auto;
+  }
+  pre.line-numbers .line-numbers-rows > span {
+    position: relative;
+    cursor: pointer;
+  }
+  pre.line-numbers .line-numbers-rows > span:hover {
+    background: var(--accent-soft);
+  }
+  pre.line-numbers .line-numbers-rows > span:hover::after {
+    content: '💬';
+    position: absolute;
+    left: calc(100% + 6px);
+    top: -2px;
+    font-size: 12px;
+    line-height: 1.2;
+    pointer-events: none;
+  }
+  /* When the row already has a thread bar, push the hover icon a touch right
+     so it sits past the indicator. */
+  pre.line-numbers .line-numbers-rows > span.has-thread-line:hover::after {
+    left: calc(100% + 10px);
+  }
   .thread-marker.is-resolved { background: #2e7d32 !important; color: white !important; }
 
   /* Draft marker (new-thread draft — user started typing a new comment
@@ -717,6 +845,11 @@
   <span class="meta" id="meta-status">Loading…</span>
   <span class="spacer"></span>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
+  <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme (system / light / dark)">
+    <svg class="theme-icon theme-icon-system" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+    <svg class="theme-icon theme-icon-light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M4.93 4.93l1.41 1.41"></path><path d="M17.66 17.66l1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M4.93 19.07l1.41-1.41"></path><path d="M17.66 6.34l1.41-1.41"></path></svg>
+    <svg class="theme-icon theme-icon-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+  </button>
   <span class="done-control" id="done-control">
     <button id="copy-all" title="Finish the review and send the transcript to the agent">Done — send to chat</button>
   </span>
@@ -813,6 +946,23 @@
 []
 </script>
 
+<!--
+  Prism: load core, autoloader (resolves grammars on demand), diff-highlight,
+  and line-numbers. We set Prism.manual = true so the page controls when
+  highlighting runs, instead of Prism auto-running on DOMContentLoaded.
+-->
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://unpkg.com/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script src="https://unpkg.com/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script src="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script src="https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script>
+(function () {
+  if (!window.Prism || !Prism.plugins || !Prism.plugins.autoloader) return;
+  Prism.plugins.autoloader.languages_path = 'https://unpkg.com/prismjs@1.30.0/components/';
+})();
+</script>
+
 <script>
 (function() {
   const stateSeed = Object.prototype.hasOwnProperty.call(window, '__DISCUSS_INITIAL_STATE__')
@@ -857,8 +1007,17 @@
         text: t.text || '',
         breadcrumb: t.breadcrumb || '',
         createdAt: t.createdAt || new Date().toISOString(),
+        lineRange: normalizeLineRange(t.lineRange),
       }))
       .filter(t => t.id && Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd));
+  }
+  function normalizeLineRange(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const start = parseInt(raw.start, 10);
+    const end = parseInt(raw.end, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    if (start < 1 || end < start) return null;
+    return { start, end };
   }
   function normalizeFollowups(rawFollowups, rawReplies, userThreads) {
     const followups = {};
@@ -1762,7 +1921,14 @@
     el.setAttribute('data-thread-id', t.id);
     el.setAttribute('data-anchor-start', t.anchorStart);
     el.setAttribute('data-anchor-end', t.anchorEnd);
-    const rangeLabel = t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`;
+    if (t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)) {
+      el.setAttribute('data-line-start', t.lineRange.start);
+      el.setAttribute('data-line-end', t.lineRange.end);
+    }
+    const lineLabel = t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)
+      ? (t.lineRange.start === t.lineRange.end ? `, line ${t.lineRange.start}` : `, lines ${t.lineRange.start}–${t.lineRange.end}`)
+      : '';
+    const rangeLabel = (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel;
     el.innerHTML = `
       <div class="thread-head">
         <span>Your thread</span>
@@ -2122,9 +2288,26 @@
   function syncThreadActiveAnchors() {
     document.querySelectorAll('#doc-content [data-anchor-idx].thread-active')
       .forEach(el => el.classList.remove('thread-active'));
+    document.querySelectorAll('.line-numbers-rows > span.thread-active-line')
+      .forEach(span => span.classList.remove('thread-active-line'));
     document.querySelectorAll('.thread.open').forEach(thread => {
       const start = parseInt(thread.getAttribute('data-anchor-start'));
       const end = parseInt(thread.getAttribute('data-anchor-end'));
+      const lineStart = parseInt(thread.getAttribute('data-line-start'));
+      const lineEnd = parseInt(thread.getAttribute('data-line-end'));
+      // For line-anchored threads on a single code block, highlight only the
+      // affected gutter rows instead of painting the whole <pre>.
+      if (start === end && Number.isFinite(lineStart) && Number.isFinite(lineEnd)) {
+        const anchor = getAnchorElByIdx(start);
+        const pre = anchor && (anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre'));
+        const rows = pre && pre.querySelector('.line-numbers-rows');
+        if (rows) {
+          for (let i = lineStart - 1; i < lineEnd && i < rows.children.length; i++) {
+            rows.children[i].classList.add('thread-active-line');
+          }
+          return;
+        }
+      }
       for (let i = start; i <= end; i++) {
         const el = getAnchorElByIdx(i);
         if (el) el.classList.add('thread-active');
@@ -2251,11 +2434,13 @@
 
     const state = loadState();
     const followupDrafts = state.drafts.followup || {};
+    const userThreadById = new Map((state.userThreads || []).map(t => [String(t.id), t]));
     byIdx.forEach((list, idx) => {
       const anchor = getAnchorElByIdx(idx);
       if (!anchor) return;
-      const stack = document.createElement('div');
-      stack.className = 'thread-marker-stack';
+      const pre = anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre');
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      let stack = null;
       list.forEach(thread => {
         const tid = thread.getAttribute('data-thread-id');
         const data = prepopulated.find(p => p.id === tid);
@@ -2268,9 +2453,26 @@
           + (hasDraftFollowup ? ' has-draft' : '');
         marker.setAttribute('data-thread-id', tid);
         marker.textContent = resolved ? '✓' : (data && data.index != null ? data.index : '•');
-        stack.appendChild(marker);
+        const userThread = userThreadById.get(tid);
+        const lineRange = userThread && userThread.lineRange;
+        const row = lineRange && rows ? rows.children[lineRange.start - 1] : null;
+        if (row) {
+          // Position the marker next to its anchored line in the gutter.
+          const wrapperRect = anchor.getBoundingClientRect();
+          const rowRect = row.getBoundingClientRect();
+          const top = rowRect.top - wrapperRect.top + (rowRect.height - 20) / 2;
+          marker.classList.add('aligned-to-line');
+          marker.style.top = top + 'px';
+          anchor.appendChild(marker);
+        } else {
+          if (!stack) {
+            stack = document.createElement('div');
+            stack.className = 'thread-marker-stack';
+          }
+          stack.appendChild(marker);
+        }
       });
-      anchor.appendChild(stack);
+      if (stack) anchor.appendChild(stack);
     });
 
     // Render new-thread draft markers (teal, dashed, "…"). These live
@@ -2296,9 +2498,40 @@
       stack.appendChild(marker);
     });
 
+    // Render line-range gutter bars for code-block threads.
+    renderLineRangeIndicators(state);
+
     // Keep the header in sync — it surfaces draft count too.
     syncOpenThreadMarkerClasses();
     renderMetaStatus();
+  }
+
+  function renderLineRangeIndicators(state) {
+    document
+      .querySelectorAll('.line-numbers-rows > span.has-thread-line')
+      .forEach(span => {
+        span.classList.remove('has-thread-line', 'thread-resolved-line');
+      });
+    const userThreads = Array.isArray(state.userThreads) ? state.userThreads : [];
+    userThreads.forEach(thread => {
+      if (!thread.lineRange) return;
+      const anchorEl = getAnchorElByIdx(thread.anchorStart);
+      if (!anchorEl) return;
+      const pre = anchorEl.tagName === 'PRE' ? anchorEl : anchorEl.querySelector('pre');
+      if (!pre) return;
+      const rows = pre.querySelector('.line-numbers-rows');
+      if (!rows) return;
+      const spans = rows.children;
+      const resolved = !!(state.resolutions && state.resolutions[thread.id]);
+      const startIdx = Math.max(0, thread.lineRange.start - 1);
+      const endIdx = Math.min(spans.length, thread.lineRange.end);
+      for (let i = startIdx; i < endIdx; i++) {
+        const span = spans[i];
+        if (!span) continue;
+        span.classList.add('has-thread-line');
+        if (resolved) span.classList.add('thread-resolved-line');
+      }
+    });
   }
 
   function syncOpenThreadMarkerClasses() {
@@ -2401,6 +2634,19 @@
   });
 
   // ---------- Positioning ----------
+  function anchorTopForThread(threadEl, paneRightRect) {
+    const startIdx = threadEl.getAttribute('data-anchor-start');
+    const anchor = getAnchorElByIdx(startIdx);
+    if (!anchor) return null;
+    const lineStart = parseInt(threadEl.getAttribute('data-line-start'));
+    if (Number.isFinite(lineStart)) {
+      const pre = anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre');
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      const row = rows && rows.children[lineStart - 1];
+      if (row) return row.getBoundingClientRect().top - paneRightRect.top;
+    }
+    return anchor.getBoundingClientRect().top - paneRightRect.top;
+  }
   function reposition() {
     const open = Array.from(threadsHost.querySelectorAll('.thread.open'));
     if (!open.length) {
@@ -2413,11 +2659,8 @@
     const gap = 10;
     let prevBottom = 0;
     open.forEach(thread => {
-      const startIdx = thread.getAttribute('data-anchor-start');
-      const anchor = getAnchorElByIdx(startIdx);
-      if (!anchor) return;
-      const anchorRect = anchor.getBoundingClientRect();
-      let top = anchorRect.top - paneRightRect.top;
+      let top = anchorTopForThread(thread, paneRightRect);
+      if (top == null) return;
       if (top < prevBottom + gap) top = prevBottom + gap;
       thread.style.top = top + 'px';
       prevBottom = top + thread.offsetHeight;
@@ -2435,23 +2678,42 @@
     if (newThreadEditor) { newThreadEditor.remove(); newThreadEditor = null; }
     document.querySelectorAll('#doc-content [data-anchor-idx].focused').forEach(el => el.classList.remove('focused'));
     document.querySelectorAll('#doc-content [data-anchor-idx].in-range').forEach(el => el.classList.remove('in-range'));
+    document.querySelectorAll('.line-numbers-rows > span.draft-active-line').forEach(span => span.classList.remove('draft-active-line'));
     // Re-render markers so a newly-stashed draft shows a teal marker in
     // the gutter, or a just-cleared draft disappears.
     if (hadEditor) renderMarkers();
   }
 
-  function openNewThreadEditor(startIdx, endIdx) {
+  function openNewThreadEditor(startIdx, endIdx, options) {
     closeNewThreadEditor();
-    for (let i = startIdx; i <= endIdx; i++) {
-      const el = getAnchorElByIdx(i);
-      if (el) el.classList.add(startIdx === endIdx ? 'focused' : 'in-range');
+    const lineRange = options && options.lineRange ? options.lineRange : null;
+    if (lineRange) {
+      // Line-range draft: highlight only the affected gutter rows, not the
+      // whole code block. The .pre-wrap anchor stays clean of .focused so the
+      // big blue outline doesn't cover the whole pre.
+      const wrapper = getAnchorElByIdx(startIdx);
+      const pre = wrapper && (wrapper.tagName === 'PRE' ? wrapper : wrapper.querySelector('pre'));
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      if (rows) {
+        for (let i = lineRange.start - 1; i < lineRange.end && i < rows.children.length; i++) {
+          rows.children[i].classList.add('draft-active-line');
+        }
+      }
+    } else {
+      for (let i = startIdx; i <= endIdx; i++) {
+        const el = getAnchorElByIdx(i);
+        if (el) el.classList.add(startIdx === endIdx ? 'focused' : 'in-range');
+      }
     }
     const anchorEl = getAnchorElByIdx(startIdx);
     if (!anchorEl) return;
 
     const editor = document.createElement('div');
     editor.className = 'new-thread-editor';
-    const rangeLabel = startIdx === endIdx ? `#${startIdx}` : `#${startIdx}–${endIdx}`;
+    const lineLabel = lineRange
+      ? (lineRange.start === lineRange.end ? `, line ${lineRange.start}` : `, lines ${lineRange.start}–${lineRange.end}`)
+      : '';
+    const rangeLabel = (startIdx === endIdx ? `#${startIdx}` : `#${startIdx}–${endIdx}`) + lineLabel;
     const snippet = snippetOfRange(startIdx, endIdx);
     editor.innerHTML = `
       <div class="anchor-ref">${rangeLabel} · ${escapeHtml(snippet.slice(0, 140))}${snippet.length > 140 ? '…' : ''}</div>
@@ -2514,6 +2776,7 @@
         snippet,
         text,
         createdAt,
+        lineRange: lineRange ? { ...lineRange } : null,
       });
       s.threads.push({
         id,
@@ -2524,6 +2787,7 @@
         breadcrumb: '',
         createdAt,
         kind: 'user',
+        ...(lineRange ? { lineRange: { ...lineRange } } : {}),
       });
       if (!s.followups[id]) s.followups[id] = [];
       s.followups[id].push({ text, addedAt: createdAt, kind: 'thread' });
@@ -2542,6 +2806,7 @@
             anchorEnd: parseInt(endIdx),
             snippet,
             text,
+            ...(lineRange ? { lineRange: { start: lineRange.start, end: lineRange.end } } : {}),
           },
         });
         let draftClearError = null;
@@ -2587,7 +2852,7 @@
         console.error('Failed to create thread:', error);
         setCurrentState(previousState);
         renderAllThreads();
-        openNewThreadEditor(startIdx, endIdx);
+        openNewThreadEditor(startIdx, endIdx, { lineRange });
         const restoredTextarea = newThreadEditor?.querySelector('textarea');
         if (restoredTextarea) {
           restoredTextarea.value = text;
@@ -2650,7 +2915,57 @@
     const lo = Math.min(startIdx, endIdx);
     const hi = Math.max(startIdx, endIdx);
     const rect = r.getBoundingClientRect();
-    return { startIdx: lo, endIdx: hi, rect };
+    const lineRange = lineRangeWithinPre(r, startEl, endEl);
+    return { startIdx: lo, endIdx: hi, rect, lineRange };
+  }
+
+  function lineRangeWithinPre(range, startAnchor, endAnchor) {
+    if (!startAnchor || startAnchor !== endAnchor) return null;
+    // Comrak wraps <pre> in <div class="pre-wrap" data-anchor-idx="N"> — that
+    // wrapper is what closestAnchor returns. Walk down to the actual <pre>.
+    const pre = startAnchor.tagName === 'PRE'
+      ? startAnchor
+      : startAnchor.querySelector('pre');
+    if (!pre) return null;
+    const code = pre.querySelector('code') || pre;
+    const startOffset = rangeOffsetWithin(code, range.startContainer, range.startOffset);
+    const endOffset = rangeOffsetWithin(code, range.endContainer, range.endOffset);
+    if (startOffset == null || endOffset == null) return null;
+    const codeText = code.textContent || '';
+    const lo = Math.min(startOffset, endOffset);
+    const hi = Math.max(startOffset, endOffset);
+    const startLine = lineNumberAt(codeText, lo);
+    let endLine = lineNumberAt(codeText, hi);
+    // Round to whole lines: if the selection ends right at the start of a line
+    // (offset just past a \n), the user clearly meant the previous line.
+    if (hi > lo && hi > 0 && codeText[hi - 1] === '\n') {
+      endLine = Math.max(startLine, endLine - 1);
+    }
+    if (endLine < startLine) return null;
+    return { start: startLine, end: endLine };
+  }
+
+  // Use Range.toString() over a clone bounded by the code element. This is
+  // robust against Prism's tokenized <span> tree, where naive textNode walks
+  // can desync with how Range computes offsets.
+  function rangeOffsetWithin(root, container, offset) {
+    if (root !== container && !root.contains(container)) return null;
+    try {
+      const prefix = document.createRange();
+      prefix.selectNodeContents(root);
+      prefix.setEnd(container, offset);
+      return prefix.toString().length;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function lineNumberAt(text, offset) {
+    let line = 1;
+    for (let i = 0; i < offset && i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) line++;
+    }
+    return line;
   }
   function updateSelectionPopup() {
     const info = selectionRange();
@@ -2666,6 +2981,13 @@
     selectionPopup.style.display = 'block';
     selectionPopup.dataset.startIdx = info.startIdx;
     selectionPopup.dataset.endIdx = info.endIdx;
+    if (info.lineRange) {
+      selectionPopup.dataset.lineStart = String(info.lineRange.start);
+      selectionPopup.dataset.lineEnd = String(info.lineRange.end);
+    } else {
+      delete selectionPopup.dataset.lineStart;
+      delete selectionPopup.dataset.lineEnd;
+    }
   }
   document.addEventListener('selectionchange', () => setTimeout(updateSelectionPopup, 0));
   document.addEventListener('mouseup', () => setTimeout(updateSelectionPopup, 0));
@@ -2675,9 +2997,14 @@
     e.preventDefault();
     const startIdx = parseInt(selectionPopup.dataset.startIdx);
     const endIdx = parseInt(selectionPopup.dataset.endIdx);
+    const lineStart = parseInt(selectionPopup.dataset.lineStart);
+    const lineEnd = parseInt(selectionPopup.dataset.lineEnd);
+    const lineRange = Number.isFinite(lineStart) && Number.isFinite(lineEnd)
+      ? { start: lineStart, end: lineEnd }
+      : null;
     selectionPopup.style.display = 'none';
     window.getSelection()?.removeAllRanges?.();
-    openNewThreadEditor(startIdx, endIdx);
+    openNewThreadEditor(startIdx, endIdx, { lineRange });
   });
 
   // ---------- Click dispatch ----------
@@ -2790,12 +3117,113 @@
   document.addEventListener('click', blockCompletedInteraction, true);
   document.addEventListener('input', blockCompletedInteraction, true);
 
+  // ---------- Click-to-comment per code line ----------
+  // The Prism line-numbers plugin renders one <span> per line inside
+  // .line-numbers-rows. We make those rows clickable so a single click on a
+  // line opens a new-thread editor anchored to that one line. Capture phase
+  // so we preempt the document-level "click on <pre>" handler that would
+  // otherwise create a whole-block thread.
+  document.addEventListener('click', (event) => {
+    const span = event.target.closest && event.target.closest('.line-numbers-rows > span');
+    if (!span) return;
+    const rows = span.parentElement;
+    // The anchor with data-anchor-idx is the <div class="pre-wrap"> wrapper
+    // around the <pre>, not the <pre> itself.
+    const wrapper = rows && rows.closest('[data-anchor-idx]');
+    if (!wrapper) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const blockIdx = parseInt(wrapper.getAttribute('data-anchor-idx'));
+    const lineNumber = Array.prototype.indexOf.call(rows.children, span) + 1;
+    if (!Number.isFinite(blockIdx) || lineNumber < 1) return;
+    if (!showAllBtn.classList.contains('on')) closeAllThreads();
+    openNewThreadEditor(blockIdx, blockIdx, {
+      lineRange: { start: lineNumber, end: lineNumber },
+    });
+  }, true);
+
+  // ---------- Theme toggle ----------
+  const THEME_STORAGE_KEY = 'discuss-theme';
+  const THEME_MODES = ['system', 'light', 'dark'];
+  const themeMediaQuery = window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
+  function effectiveThemeFor(mode) {
+    if (mode === 'system') {
+      return themeMediaQuery && themeMediaQuery.matches ? 'dark' : 'light';
+    }
+    return mode;
+  }
+  function currentThemeMode() {
+    const root = document.documentElement;
+    return THEME_MODES.includes(root.dataset.themeMode) ? root.dataset.themeMode : 'system';
+  }
+  function applyThemeMode(mode) {
+    const root = document.documentElement;
+    const effective = effectiveThemeFor(mode);
+    root.dataset.theme = effective;
+    root.dataset.themeMode = mode;
+    document.querySelectorAll('link[data-prism-theme]').forEach(link => {
+      link.disabled = (link.dataset.prismTheme !== effective);
+    });
+    document.querySelectorAll('.theme-toggle .theme-icon').forEach(icon => {
+      icon.hidden = !icon.classList.contains('theme-icon-' + mode);
+    });
+  }
+  function initThemeToggle() {
+    const btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    applyThemeMode(currentThemeMode());
+    btn.addEventListener('click', () => {
+      const next = THEME_MODES[(THEME_MODES.indexOf(currentThemeMode()) + 1) % THEME_MODES.length];
+      try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
+      applyThemeMode(next);
+    });
+    if (themeMediaQuery) {
+      const onSystemChange = () => {
+        if (currentThemeMode() === 'system') applyThemeMode('system');
+      };
+      if (themeMediaQuery.addEventListener) {
+        themeMediaQuery.addEventListener('change', onSystemChange);
+      } else if (themeMediaQuery.addListener) {
+        themeMediaQuery.addListener(onSystemChange);
+      }
+    }
+  }
+
+  // ---------- Syntax highlighting ----------
+  function highlightCodeBlocks() {
+    if (!window.Prism) return;
+    document.querySelectorAll('#doc-content pre').forEach(pre => {
+      pre.classList.add('line-numbers');
+    });
+    Prism.highlightAllUnder(document.getElementById('doc-content'));
+  }
+  function attachPrismCompleteHook() {
+    if (!window.Prism || !Prism.hooks || !Prism.hooks.add) return;
+    if (window.__discussPrismHookAttached) return;
+    window.__discussPrismHookAttached = true;
+    Prism.hooks.add('complete', function (env) {
+      if (!env || !env.element) return;
+      const docContent = document.getElementById('doc-content');
+      if (!docContent || !docContent.contains(env.element)) return;
+      // Re-attach line-range gutter bars once the line-numbers plugin has
+      // produced the per-line spans inside this <pre>.
+      renderMarkers();
+    });
+  }
+
   // ---------- Init ----------
+  initThemeToggle();
+  attachPrismCompleteHook();
   hydrateState().then(() => {
+    highlightCodeBlocks();
     renderAllThreads();
     scheduleReposition();
     startEventStream();
     startHeartbeat();
+    setTimeout(scheduleReposition, 600);
+    setTimeout(scheduleReposition, 1500);
   });
   window.addEventListener('beforeunload', () => {
     stopHeartbeat();
