@@ -1862,14 +1862,24 @@
     const idx = parseInt(el.getAttribute('data-anchor-idx'));
     return [idx, idx];
   }
+  // Reading textContent directly would pick up the text inside any
+  // .thread-marker / .thread-marker-stack we've appended to the anchor
+  // (e.g. the teal "…" draft dot or the "•" saved-thread dot), polluting
+  // the captured snippet. Clone the node and strip those before reading.
+  function anchorPlainText(el) {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('.thread-marker, .thread-marker-stack').forEach(n => n.remove());
+    return (clone.textContent || '').trim();
+  }
   function snippetOfAnchor(anchorEl) {
-    return (anchorEl ? (anchorEl.textContent || '') : '').trim().replace(/\s+/g, ' ').slice(0, 140);
+    return anchorPlainText(anchorEl).replace(/\s+/g, ' ').slice(0, 140);
   }
   function snippetOfRange(startIdx, endIdx) {
     const parts = [];
     for (let i = startIdx; i <= endIdx; i++) {
       const el = getAnchorElByIdx(i);
-      if (el) parts.push((el.textContent || '').trim());
+      if (el) parts.push(anchorPlainText(el));
     }
     return parts.join(' / ').replace(/\s+/g, ' ').slice(0, 220);
   }
