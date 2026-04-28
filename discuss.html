@@ -2536,25 +2536,49 @@
 
     // Render new-thread draft markers (teal, dashed, "…"). These live
     // alongside thread markers on the same anchor if both exist.
+    //
+    // Two sources feed this:
+    //  1. Persisted drafts (state.drafts.newThread) — survive reload.
+    //  2. The currently-open editor (activeNewThreadDraft) — gives the user
+    //     a placeholder dot the moment they open the editor, before they've
+    //     typed anything. Cleared on cancel/click-off so the dot disappears.
     const newThreadDrafts = state.drafts.newThread || {};
+    const draftAnchors = new Map();
     Object.entries(newThreadDrafts).forEach(([key, draft]) => {
       if (!draft || !draft.text || !draft.text.trim()) return;
-      const anchor = getAnchorElByIdx(draft.anchorStart);
+      draftAnchors.set(key, {
+        key,
+        anchorStart: draft.anchorStart,
+        anchorEnd: draft.anchorEnd,
+      });
+    });
+    if (activeNewThreadDraft) {
+      const key = newThreadDraftKey(activeNewThreadDraft.anchorStart, activeNewThreadDraft.anchorEnd);
+      if (!draftAnchors.has(key)) {
+        draftAnchors.set(key, {
+          key,
+          anchorStart: activeNewThreadDraft.anchorStart,
+          anchorEnd: activeNewThreadDraft.anchorEnd,
+        });
+      }
+    }
+    draftAnchors.forEach(({ key, anchorStart, anchorEnd }) => {
+      const anchor = getAnchorElByIdx(anchorStart);
       if (!anchor) return;
       anchor.classList.add('has-thread');
       const marker = document.createElement('button');
       marker.className = 'thread-marker kind-draft';
       marker.setAttribute('data-draft-key', key);
-      marker.setAttribute('data-anchor-start', draft.anchorStart);
-      marker.setAttribute('data-anchor-end', draft.anchorEnd);
+      marker.setAttribute('data-anchor-start', anchorStart);
+      marker.setAttribute('data-anchor-end', anchorEnd);
       marker.textContent = '…';
       // Drafts don't carry lineRange in persisted state, but if the editor
       // for this exact anchor range is open we can read its lineRange from
       // the in-memory cache and position the dot at the line.
       const lineRange = (
         activeNewThreadDraft
-        && activeNewThreadDraft.anchorStart === draft.anchorStart
-        && activeNewThreadDraft.anchorEnd === draft.anchorEnd
+        && activeNewThreadDraft.anchorStart === anchorStart
+        && activeNewThreadDraft.anchorEnd === anchorEnd
       ) ? activeNewThreadDraft.lineRange : null;
       const pre = lineRange
         ? (anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre'))
@@ -2794,15 +2818,16 @@
     const anchorEl = getAnchorElByIdx(startIdx);
     if (!anchorEl) return;
 
-    // Stash the active draft's lineRange + anchor range so renderMarkers can
-    // place the teal draft dot line-aligned. Cleared in closeNewThreadEditor.
-    if (lineRange) {
-      activeNewThreadDraft = {
-        anchorStart: parseInt(startIdx, 10),
-        anchorEnd: parseInt(endIdx, 10),
-        lineRange: { ...lineRange },
-      };
-    }
+    // Stash the editor's anchor range (and lineRange when present) so
+    // renderMarkers can paint a placeholder draft dot the moment the editor
+    // opens. Cleared in closeNewThreadEditor so cancel/click-off makes the
+    // dot disappear.
+    activeNewThreadDraft = {
+      anchorStart: parseInt(startIdx, 10),
+      anchorEnd: parseInt(endIdx, 10),
+      lineRange: lineRange ? { ...lineRange } : null,
+    };
+    renderMarkers();
 
     const editor = document.createElement('div');
     editor.className = 'new-thread-editor';
