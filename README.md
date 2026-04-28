@@ -73,6 +73,21 @@ echo "# Quick note\n\nReview this." | discuss
 
 In stdin mode, `session.started` reports `source_file: "<stdin>"` and history archives are written under `<history-dir>/unnamed/<timestamp>.json` since there's no source path to derive a folder name from. Bare `discuss` in an interactive terminal still prints help and exits 2.
 
+### Reviewing a staged git diff
+
+Stdin + syntax highlighting + line-anchored threads make `discuss` a natural pre-commit review surface. Drop this in a custom prompt your agent can run before each commit:
+
+> Before committing, open the staged diff for review in discuss.
+>
+> Generate a temporary markdown file from the currently staged diff. Split the diff by file. For each file, add:
+> 1. a short summary of why the file is changing
+> 2. a short summary of what the change does
+> 3. the staged diff in a separate fenced diff code block
+>
+> Use `git diff --cached -U10` so each hunk includes 10 lines of original file context, and let nearby hunks merge naturally. Open it with `discuss` in browser-opening mode. Do not use `--no-open`. Watch the discuss session until `session.done`, respond to comments with takes, and do not commit until I explicitly confirm after the review.
+
+The agent's per-file prose anchors block-level threads ("why is this changing?"), and the fenced ` ```diff ` blocks let you drop line-anchored comments directly on the added/removed lines. No PR, no Google Doc, no copy-paste — just review-then-commit in one terminal session.
+
 ## CLI
 
 | Command | Description |
