@@ -2,6 +2,8 @@ use std::process::Command;
 
 use crate::error::{DiscussError, Result};
 
+pub const DIFF_SIZE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct DiffOutput {
     pub git_args: Vec<String>,
@@ -39,6 +41,16 @@ pub fn run_git_diff(unstaged: bool, extra: &[String]) -> Result<DiffOutput> {
             stderr
         };
         return Err(DiscussError::DiffError { message });
+    }
+
+    if output.stdout.len() > DIFF_SIZE_LIMIT_BYTES {
+        return Err(DiscussError::DiffError {
+            message: format!(
+                "diff is {} bytes, which exceeds the {} MB limit. Narrow the range (e.g. fewer commits, a path filter, or smaller -U context).",
+                output.stdout.len(),
+                DIFF_SIZE_LIMIT_BYTES / (1024 * 1024)
+            ),
+        });
     }
 
     let stdout = String::from_utf8(output.stdout).map_err(|source| DiscussError::DiffError {
@@ -125,5 +137,10 @@ index 0000..89ab
         let block =
             "diff --git a/old.md b/new/path.md\nrename from old.md\nrename to new/path.md\n";
         assert_eq!(parse_path_from_block(block).as_deref(), Some("new/path.md"));
+    }
+
+    #[test]
+    fn diff_size_limit_is_five_megabytes() {
+        assert_eq!(DIFF_SIZE_LIMIT_BYTES, 5 * 1024 * 1024);
     }
 }
