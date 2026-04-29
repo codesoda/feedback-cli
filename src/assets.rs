@@ -185,6 +185,15 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_lazy_highlights_diff_hunks_via_intersection_observer() {
+        let template = discuss_v2_html();
+        assert!(template.contains("function observeForLazyHighlight"));
+        assert!(template.contains("IntersectionObserver"));
+        assert!(template.contains("dataset.prismHighlighted"));
+        assert!(template.contains("rootMargin: '200px 0px'"));
+    }
+
+    #[test]
     fn discuss_v2_template_supports_file_tree_filter_and_open_only_toggle() {
         let template = discuss_v2_html();
         assert!(template.contains("v2-tree-controls"));

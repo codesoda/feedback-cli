@@ -393,11 +393,11 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     const parsed = useMemo(() => parseDiffFile(content || '', path), [content, path]);
 
     useEffect(() => {
-      if (!articleRef.current) return;
+      if (!articleRef.current) return undefined;
       Array.from(articleRef.current.querySelectorAll('[data-hunk-idx]')).forEach((el, idx) => {
         el.setAttribute('data-anchor-idx', String(idx + 1));
       });
-      highlightWithPrism(articleRef.current);
+      return observeForLazyHighlight(articleRef.current);
     }, [fileId, content, path]);
 
     if (parsed.binary) {
@@ -538,6 +538,30 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     try { window.Prism.highlightAllUnder(root); } catch (err) {
       console.debug('discuss v2 prism highlight failed:', err && err.message);
     }
+  }
+
+  function observeForLazyHighlight(root) {
+    if (!root) return () => {};
+    const targets = Array.from(root.querySelectorAll('pre.v2-diff-hunk'));
+    if (!targets.length) {
+      highlightWithPrism(root);
+      return () => {};
+    }
+    if (typeof window.IntersectionObserver !== 'function') {
+      targets.forEach(highlightWithPrism);
+      return () => {};
+    }
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        if (entry.target.dataset.prismHighlighted === 'true') return;
+        entry.target.dataset.prismHighlighted = 'true';
+        highlightWithPrism(entry.target);
+        observer.unobserve(entry.target);
+      });
+    }, { rootMargin: '200px 0px', threshold: 0 });
+    targets.forEach(target => observer.observe(target));
+    return () => observer.disconnect();
   }
 
   let mermaidPromise = null;
