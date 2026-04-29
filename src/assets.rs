@@ -159,6 +159,19 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_supports_three_mode_theme_toggle_with_storage() {
+        let template = discuss_v2_html();
+        assert!(template.contains("THEME_STORAGE_KEY"));
+        assert!(template.contains("'discuss-theme'"));
+        assert!(template.contains("function ThemeToggle"));
+        assert!(template.contains("function applyThemeMode"));
+        assert!(template.contains("function nextThemeMode"));
+        assert!(template.contains("v2-theme-toggle"));
+        assert!(template.contains("html[data-theme=\"dark\"]"));
+        assert!(template.contains("root.dataset.themeMode"));
+    }
+
+    #[test]
     fn discuss_v2_template_lazy_loads_mermaid_for_markdown_blocks() {
         let template = discuss_v2_html();
         assert!(template.contains("function loadMermaid"));

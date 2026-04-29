@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
   <style>
     :root { color-scheme: light dark; --tree-w: 220px; --threads-w: 320px; }
+    html[data-theme="light"] { color-scheme: light; }
+    html[data-theme="dark"] { color-scheme: dark; }
     * { box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; margin: 0; }
     .v2-layout { display: grid; grid-template-columns: var(--tree-w) 1fr var(--threads-w); min-height: 100vh; }
@@ -45,7 +47,7 @@
     .v2-selection-popup { position: fixed; z-index: 1000; padding: 0.35rem 0.6rem; background: rgba(20,20,20,0.92); color: #fff; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.25); }
     .v2-selection-popup:hover { background: rgba(20,20,20,1); }
     .v2-new-thread-editor { position: absolute; z-index: 999; width: min(420px, 90vw); padding: 0.75rem; border-radius: 8px; background: var(--editor-bg, #fff); border: 1px solid rgba(127,127,127,0.4); box-shadow: 0 6px 18px rgba(0,0,0,0.18); display: flex; flex-direction: column; gap: 0.5rem; }
-    @media (prefers-color-scheme: dark) { .v2-new-thread-editor { background: #1f1f1f; } }
+    html[data-theme="dark"] .v2-new-thread-editor { background: #1f1f1f; }
     .v2-new-thread-editor .v2-editor-snippet { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.7; padding: 0.35rem 0.5rem; background: rgba(127,127,127,0.12); border-radius: 4px; max-height: 4.5em; overflow: hidden; }
     .v2-new-thread-editor textarea { font: inherit; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); resize: vertical; min-height: 4.5em; background: transparent; color: inherit; }
     .v2-new-thread-editor textarea:focus { outline: 2px solid rgba(80,140,255,0.5); outline-offset: 1px; }
@@ -92,15 +94,24 @@
     .review-complete .v2-thread-card button,
     .review-complete .v2-thread-card textarea { pointer-events: none; opacity: 0.55; }
     .review-complete .v2-tree li { pointer-events: none; }
+    .v2-banner .v2-theme-toggle { margin-left: 0.5rem; padding: 0.15rem 0.55rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); background: transparent; cursor: pointer; font: inherit; font-size: 0.75rem; color: inherit; }
+    .v2-banner .v2-theme-toggle:hover { background: rgba(127,127,127,0.12); }
   </style>
   <script src="/assets/preact.umd.js"></script>
   <script src="/assets/preact-hooks.umd.js"></script>
   <script src="/assets/htm.umd.js"></script>
-  <script>
+  <script id="v2-theme-bootstrap">
 (function () {
+    var stored = null;
+    try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+    var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
     var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+    var root = document.documentElement;
+    root.dataset.theme = effective;
+    root.dataset.themeMode = mode;
     document.querySelectorAll('link[data-prism-theme]').forEach(function (link) {
-      link.disabled = (link.dataset.prismTheme === 'dark') ? !prefersDark : prefersDark;
+      link.disabled = (link.dataset.prismTheme !== effective);
     });
   })();
   </script>
@@ -179,6 +190,76 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       });
     }
     return out;
+  }
+
+  const THEME_STORAGE_KEY = 'discuss-theme';
+  const THEME_MODES = ['system', 'light', 'dark'];
+  const themeMediaQuery = window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
+  function effectiveThemeFor(mode) {
+    if (mode === 'system') {
+      return themeMediaQuery && themeMediaQuery.matches ? 'dark' : 'light';
+    }
+    return mode;
+  }
+  function readStoredThemeMode() {
+    const root = document.documentElement;
+    if (THEME_MODES.includes(root.dataset.themeMode)) return root.dataset.themeMode;
+    try {
+      const stored = localStorage.getItem(THEME_STORAGE_KEY);
+      if (stored === 'light' || stored === 'dark') return stored;
+    } catch (_) {}
+    return 'system';
+  }
+  function applyThemeMode(mode) {
+    const root = document.documentElement;
+    const effective = effectiveThemeFor(mode);
+    root.dataset.theme = effective;
+    root.dataset.themeMode = mode;
+    document.querySelectorAll('link[data-prism-theme]').forEach(link => {
+      link.disabled = (link.dataset.prismTheme !== effective);
+    });
+    try { localStorage.setItem(THEME_STORAGE_KEY, mode); } catch (_) {}
+  }
+  function nextThemeMode(current) {
+    const idx = Math.max(0, THEME_MODES.indexOf(current));
+    return THEME_MODES[(idx + 1) % THEME_MODES.length];
+  }
+  function themeIcon(mode) {
+    if (mode === 'light') return '☀';
+    if (mode === 'dark') return '☾';
+    return '⌖';
+  }
+
+  function ThemeToggle() {
+    const [mode, setMode] = useState(readStoredThemeMode());
+    useEffect(() => {
+      if (!themeMediaQuery) return undefined;
+      const onChange = () => { if (mode === 'system') applyThemeMode('system'); };
+      if (themeMediaQuery.addEventListener) {
+        themeMediaQuery.addEventListener('change', onChange);
+        return () => themeMediaQuery.removeEventListener('change', onChange);
+      }
+      themeMediaQuery.addListener(onChange);
+      return () => themeMediaQuery.removeListener(onChange);
+    }, [mode]);
+    function cycle() {
+      const next = nextThemeMode(mode);
+      applyThemeMode(next);
+      setMode(next);
+    }
+    return html`
+      <button
+        class="v2-theme-toggle"
+        type="button"
+        aria-label=${`theme: ${mode}`}
+        title=${`theme: ${mode} (click to change)`}
+        onClick=${cycle}
+      >
+        ${themeIcon(mode)} ${mode}
+      </button>
+    `;
   }
 
   function FileTree({ files, activeId, onSelect }) {
@@ -1064,6 +1145,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
           <p class="v2-banner">
             discuss v2 (in progress) · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
             <a href="/">switch to v1</a>
+            <${ThemeToggle} />
           </p>
           ${initialFiles.map(file => html`<${FileSection} key=${file.id} file=${file} />`)}
           <div class="v2-done-bar" id="v2-done-bar">
