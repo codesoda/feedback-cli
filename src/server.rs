@@ -37,7 +37,7 @@ use crate::state::{
     Draft, File, FileId, FileKind, FileMeta, LineRange, Reply, Resolution, SharedState, Source,
     State, StateSnapshot, Take, Thread, ThreadId, ThreadKind, default_file_id,
 };
-use crate::transcript::build_transcript;
+use crate::transcript::build_transcript_with_source;
 use crate::{Config, DiscussError, Result, render, template};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -1359,7 +1359,7 @@ fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest
 
 async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
     let transcript = match app_state.state.read() {
-        Ok(state) => build_transcript(&state),
+        Ok(state) => build_transcript_with_source(&state, app_state.source.as_ref()),
         Err(_) => {
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,

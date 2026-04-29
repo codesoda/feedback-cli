@@ -39,7 +39,9 @@ pub use render::render;
 pub use server::{AppState, serve, serve_with_ready};
 pub use sse::{BroadcastEvent, EventBus};
 pub use template::render_page;
-pub use transcript::{Transcript, TranscriptThread, build_transcript};
+pub use transcript::{
+    Transcript, TranscriptThread, build_transcript, build_transcript_with_source,
+};
 
 pub const DEFAULT_PORT: u16 = 7777;
 
