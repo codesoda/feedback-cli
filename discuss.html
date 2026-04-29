@@ -565,8 +565,10 @@
     line-height: 1;
     padding: 0 4px;
     cursor: pointer;
-    opacity: 0.6;
+    opacity: 0;
+    transition: opacity 0.12s;
   }
+  .toast:hover .toast-close { opacity: 0.6; }
   .toast .toast-close:hover { opacity: 1; }
   .followup.hidden { display: none; }
   .empty-state.hidden { display: none; }
