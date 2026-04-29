@@ -32,6 +32,12 @@
     .v2-tree-badge.total { background: rgba(127,127,127,0.18); }
     .v2-tree-badge.open { background: rgba(29,111,216,0.18); color: #1d6fd8; font-weight: 600; }
     html[data-theme="dark"] .v2-tree-badge.open { color: #5fa6ff; background: rgba(95,166,255,0.18); }
+    .v2-tree-controls { display: flex; flex-direction: column; gap: 0.35rem; padding: 0 0.25rem 0.5rem; }
+    .v2-tree-controls input[type="search"] { font: inherit; padding: 0.25rem 0.4rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); background: transparent; color: inherit; font-size: 0.8rem; }
+    .v2-tree-controls input[type="search"]:focus { outline: 2px solid rgba(80,140,255,0.5); outline-offset: 1px; }
+    .v2-tree-controls label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; opacity: 0.8; cursor: pointer; }
+    .v2-tree-controls label input { margin: 0; }
+    .v2-tree-empty-message { font-size: 0.75rem; opacity: 0.55; padding: 0.25rem 0.4rem; font-style: italic; }
     .v2-content { padding: 2rem 2.5rem; max-width: 920px; }
     .v2-banner { padding: 0.6rem 0.8rem; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; opacity: 0.8; font-size: 0.8rem; margin-bottom: 1.5rem; }
     .v2-banner code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
@@ -271,6 +277,9 @@ window.__DISCUSS_RENDERED_FILES__ = {};
   }
 
   function FileTree({ files, activeId, threadCounts, onSelect }) {
+    const [query, setQuery] = useState('');
+    const [openOnly, setOpenOnly] = useState(false);
+
     if (!files.length) {
       return html`
         <nav class="v2-tree">
@@ -279,33 +288,64 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         </nav>
       `;
     }
+
+    const trimmed = query.trim().toLowerCase();
+    const visible = files.filter(file => {
+      if (trimmed && !file.path.toLowerCase().includes(trimmed)) return false;
+      if (openOnly) {
+        const counts = (threadCounts && threadCounts[file.id]) || { open: 0, total: 0 };
+        if (counts.open === 0) return false;
+      }
+      return true;
+    });
+
     return html`
       <nav class="v2-tree">
         <h2>Files</h2>
-        <ul>
-          ${files.map(file => {
-            const counts = (threadCounts && threadCounts[file.id]) || { open: 0, total: 0 };
-            return html`
-            <li
-              key=${file.id}
-              class=${file.id === activeId ? 'active' : ''}
-              onClick=${() => onSelect(file.id)}
-              title=${`${file.path} · ${counts.total} thread${counts.total === 1 ? '' : 's'}`}
-            >
-              <span class="v2-tree-path">${file.path}</span>
-              <span class="v2-tree-kind">${file.kind}</span>
-              ${counts.total > 0 ? html`
-                <span class="v2-tree-badges">
-                  ${counts.open > 0
-                    ? html`<span class="v2-tree-badge open" title=${`${counts.open} open`}>${counts.open}</span>`
-                    : null}
-                  <span class="v2-tree-badge total" title=${`${counts.total} total`}>${counts.total}</span>
-                </span>
-              ` : null}
-            </li>
-          `;
-          })}
-        </ul>
+        <div class="v2-tree-controls">
+          <input
+            type="search"
+            placeholder="filter files…"
+            value=${query}
+            onInput=${e => setQuery(e.target.value)}
+          />
+          <label>
+            <input
+              type="checkbox"
+              checked=${openOnly}
+              onChange=${e => setOpenOnly(e.target.checked)}
+            />
+            only with open threads
+          </label>
+        </div>
+        ${visible.length === 0
+          ? html`<p class="v2-tree-empty-message">no matches</p>`
+          : html`
+            <ul>
+              ${visible.map(file => {
+                const counts = (threadCounts && threadCounts[file.id]) || { open: 0, total: 0 };
+                return html`
+                <li
+                  key=${file.id}
+                  class=${file.id === activeId ? 'active' : ''}
+                  onClick=${() => onSelect(file.id)}
+                  title=${`${file.path} · ${counts.total} thread${counts.total === 1 ? '' : 's'}`}
+                >
+                  <span class="v2-tree-path">${file.path}</span>
+                  <span class="v2-tree-kind">${file.kind}</span>
+                  ${counts.total > 0 ? html`
+                    <span class="v2-tree-badges">
+                      ${counts.open > 0
+                        ? html`<span class="v2-tree-badge open" title=${`${counts.open} open`}>${counts.open}</span>`
+                        : null}
+                      <span class="v2-tree-badge total" title=${`${counts.total} total`}>${counts.total}</span>
+                    </span>
+                  ` : null}
+                </li>
+              `;
+              })}
+            </ul>
+          `}
       </nav>
     `;
   }

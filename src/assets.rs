@@ -170,6 +170,16 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_supports_file_tree_filter_and_open_only_toggle() {
+        let template = discuss_v2_html();
+        assert!(template.contains("v2-tree-controls"));
+        assert!(template.contains("placeholder=\"filter files…\""));
+        assert!(template.contains("only with open threads"));
+        assert!(template.contains("setOpenOnly"));
+        assert!(template.contains("file.path.toLowerCase().includes(trimmed)"));
+    }
+
+    #[test]
     fn discuss_v2_template_supports_three_mode_theme_toggle_with_storage() {
         let template = discuss_v2_html();
         assert!(template.contains("THEME_STORAGE_KEY"));
