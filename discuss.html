@@ -572,6 +572,9 @@
   .toast .toast-close:hover { opacity: 1; }
   .followup.hidden { display: none; }
   .empty-state.hidden { display: none; }
+  /* Clear button only matters once there's text to clear; hide it
+     otherwise so the action row isn't cluttered. */
+  .followup button.clear.hidden { display: none; }
   /* Meta-status segments. The header subtitle interpolates these spans
      into the running comma-separated string of session counts. */
   .meta-stat-draft { color: #0d9488; }
@@ -2265,10 +2268,16 @@
     const clearBtn = threadEl.querySelector('.followup .clear');
     const resolveBtn = threadEl.querySelector('.followup .resolve');
 
+    function syncClearVisibility() {
+      if (!clearBtn) return;
+      clearBtn.classList.toggle('hidden', !ta.value.length);
+    }
+
     // Pre-fill from any existing follow-up draft so the user can resume
     // where they left off last time they opened this thread.
     const existingDraft = getFollowupDraft(loadState(), threadId);
     if (existingDraft && existingDraft.text) ta.value = existingDraft.text;
+    syncClearVisibility();
 
     async function save() {
       const text = ta.value.trim();
@@ -2282,6 +2291,7 @@
       clearFollowupDraft(s, threadId);
       setCurrentState(s);
       ta.value = '';
+      syncClearVisibility();
       renderFollowups(threadEl, threadId);
       renderMarkers();
       reposition();
@@ -2314,6 +2324,7 @@
         console.error('Failed to save reply:', error);
         setCurrentState(previousState);
         ta.value = text;
+        syncClearVisibility();
         setFollowupDraft(threadId, text).catch(draftError => {
           console.error('Failed to restore follow-up draft after reply save failure:', draftError);
         });
@@ -2335,6 +2346,7 @@
       clearFollowupDraft(s, threadId);
       setCurrentState(s);
       ta.value = '';
+      syncClearVisibility();
       renderResolution(threadEl, threadId);
       renderMarkers();
       renderMetaStatus();
@@ -2364,6 +2376,7 @@
         console.error('Failed to resolve thread:', error);
         setCurrentState(previousState);
         ta.value = decision;
+        syncClearVisibility();
         if (decision) {
           setFollowupDraft(threadId, decision).catch(draftError => {
             console.error('Failed to restore follow-up draft after resolve failure:', draftError);
@@ -2379,6 +2392,7 @@
     saveBtn.addEventListener('click', save);
     clearBtn.addEventListener('click', () => {
       ta.value = '';
+      syncClearVisibility();
       clearMutationError(followup);
       setFollowupDraft(threadId, '').catch(error => {
         console.error('Failed to clear follow-up draft:', error);
@@ -2392,6 +2406,7 @@
     });
     if (resolveBtn) resolveBtn.addEventListener('click', resolve);
     ta.addEventListener('input', () => {
+      syncClearVisibility();
       clearMutationError(followup);
       setFollowupDraft(threadId, ta.value).catch(error => {
         console.error('Failed to save follow-up draft:', error);
